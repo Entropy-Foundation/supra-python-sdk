@@ -1,0 +1,85 @@
+[build-system]
+requires = ["uv_build>=0.8.15,<0.9.0"]
+build-backend = "uv_build"
+
+[project]
+name = "supra-sdk"
+version = "0.1.0"
+description = "Supra SDK"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+readme = "README.md"
+keywords = ["supra", "supra-l1", "supra-move", "move"]
+dependencies = [
+    "httpx[http2]>=0.28.1,<0.29.0",
+    "PyNaCl>=1.5.0,<2.0.0",
+    "typing-extensions>=4.4.0,<5.0.0",
+    "behave>=1.2.6,<2.0.0",
+    "types-six>=1.16.21.20240513,<2.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Entropy-Foundation/aptos-python-sdk/"
+Repository = "https://github.com/Entropy-Foundation/aptos-python-sdk/"
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+fix = true
+
+[tool.ruff.lint]
+select = [
+    # pyflakes
+    "F",
+    # pycodestyle
+    "E",
+    "W",
+    # # pydocstyle
+    # "D",
+    # flake8-bugbear
+    "B",
+    # flake8-comprehensions
+    # "C",
+    # flake8-async
+    "ASYNC",
+    # flake8-pie
+    "PIE",
+    # flake8-simplify
+    "SIM",
+    # flake8-unused-argument
+    "ARG",
+    # pep8-naming
+    "N",
+    # isort
+    "I",
+    # pyupgrade
+    "UP",
+    # Ruff-specific rules
+    "RUF",
+]
+ignore = ["E203", "E501", "E701", "B017", "RUF012"]
+exclude = ["__init__.py"]
+
+
+[tool.ruff.lint.isort]
+known-first-party = ["supra_sdk"]
+combine-as-imports = true
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.uv.build-backend]
+module-name = "supra_sdk"
+module-root = ""
+
+[dependency-groups]
+dev = [
+    "aiofiles>=24.1.0",
+    "black>=25.1.0",
+    "coverage>=7.10.6",
+    "pip>=25.2",
+    "ruff>=0.13.0",
+    "sphinx>=8.2.3",
+    "sphinx-autodoc-typehints>=3.2.0",
+    "sphinx-rtd-theme>=3.0.2",
+]
