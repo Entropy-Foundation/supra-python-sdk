@@ -3,12 +3,7 @@ name: Docs Build & Deploy
 on:
   push:
     branches:
-      - main
-    # paths:
-    #   - "docs/**"
-    #   - "examples/**"
-    #   - ".github/workflows/docs.yml"
-  workflow_dispatch:
+      - master
 
 jobs:
   docs:
@@ -31,7 +26,7 @@ jobs:
 
       - name: Build docs
         run: |
-          make generate-api-docs build-docs
+          make build-docs
 
       - name: Set up gcloud CLI
         uses: google-github-actions/auth@v2
@@ -42,5 +37,5 @@ jobs:
         uses: google-github-actions/upload-cloud-storage@v2
         with:
           path: docs/_build
-          destination: gs://${{ vars.DOCS_BUCKET }}/
+          destination: ${{ vars.DOCS_BUCKET }}
           parent: false

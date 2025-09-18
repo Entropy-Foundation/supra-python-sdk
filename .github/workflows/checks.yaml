@@ -1,10 +1,13 @@
-name: PR Checks
+name: PR and Commit checks
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - master
   pull_request:
     branches:
-      - "**"   # runs on all branches for PRs
+      - "**"
 
 jobs:
   lint:
