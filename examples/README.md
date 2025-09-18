@@ -26,5 +26,5 @@ uv run python -m examples.<example_filename_without_py_extension>
 Running `transfer_coin.py` example:
 
 ```bash
-bash uv run python -m examples.transfer_coin
+uv run python -m examples.transfer_coin
 ```

@@ -1,5 +1,6 @@
 # Supra Python SDK
 
+[![License](https://img.shields.io/badge/license-Apache-green.svg)](LICENSE)
 [![Discord chat](https://img.shields.io/discord/850682587273625661?style=flat-square)](https://discord.gg/supralabs)
 
 The `supra-python-sdk` provides a seamless interface for interacting with the Supra-L1 network. It offers comprehensive support for `move-vm` operations and transactions, enabling developers to both query on-chain data and submit `move-vm` based transactions with ease.
@@ -8,13 +9,13 @@ The `supra-python-sdk` provides a seamless interface for interacting with the Su
 
 ## Installation
 
-```sh
+```bash
 python -m pip install supra-sdk
 ```
 
 ## Usage
 
-Check [examples](https://github.com/Entropy-Foundation/supra-python-sdk/blob/master/examples/README.md) section.
+Check [examples](examples/README.md) section.
 
 ## Reference Docs
 
