@@ -1,4 +1,4 @@
-name: PR Checks
+name: PR and Commit checks
 
 on:
   workflow_dispatch:

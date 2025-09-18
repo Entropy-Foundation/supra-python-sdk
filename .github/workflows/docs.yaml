@@ -4,10 +4,6 @@ on:
   push:
     branches:
       - master
-    # paths:
-    #   - "docs/**"
-    #   - "examples/**"
-    #   - ".github/workflows/docs.yml"
 
 jobs:
   docs:
@@ -30,7 +26,7 @@ jobs:
 
       - name: Build docs
         run: |
-          make generate-api-docs build-docs
+          make build-docs
 
       - name: Set up gcloud CLI
         uses: google-github-actions/auth@v2
