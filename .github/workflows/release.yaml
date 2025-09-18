@@ -3,12 +3,11 @@ name: Docs Build & Deploy
 on:
   push:
     branches:
-      - main
+      - master
     # paths:
     #   - "docs/**"
     #   - "examples/**"
     #   - ".github/workflows/docs.yml"
-  workflow_dispatch:
 
 jobs:
   docs:
@@ -42,5 +41,5 @@ jobs:
         uses: google-github-actions/upload-cloud-storage@v2
         with:
           path: docs/_build
-          destination: gs://${{ vars.DOCS_BUCKET }}/
+          destination: ${{ vars.DOCS_BUCKET }}
           parent: false

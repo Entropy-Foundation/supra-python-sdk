@@ -2,9 +2,12 @@ name: PR Checks
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - master
   pull_request:
     branches:
-      - "**"   # runs on all branches for PRs
+      - "**"
 
 jobs:
   lint:
