@@ -2,7 +2,7 @@ Clients
 ==========================
 
 .. toctree::
-   :maxdepth: 8
+   :maxdepth: 2
    :caption: Rest
 
    supra_sdk.clients.rest
