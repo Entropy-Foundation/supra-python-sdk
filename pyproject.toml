@@ -7,7 +7,7 @@ name = "supra-sdk"
 version = "0.1.0"
 description = "A Python SDK for seamless interaction with the Supra-L1 network, supporting Move-VM operations and transactions."
 requires-python = ">=3.12"
-license = "Apache-2.0"
+license = { file = "LICENSE" }
 readme = "README.md"
 keywords = [
     "supra-python-sdk",
@@ -16,7 +16,7 @@ keywords = [
     "supra-l1",
     "supra-move",
 ]
-authors = [{ name = "The Supra Development Team" }]
+authors = [{ name = "Supra", email = "opensource@supra.com" }]
 dependencies = [
     "httpx[http2]>=0.28.1,<0.29.0",
     "PyNaCl>=1.5.0,<2.0.0",
@@ -27,6 +27,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/Entropy-Foundation/supra-python-sdk"
+Documentation = "https://supra-python-sdk.docs.supra.com/"
 Repository = "https://github.com/Entropy-Foundation/supra-python-sdk.git"
 
 [tool.ruff]

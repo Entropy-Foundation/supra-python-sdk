@@ -2,7 +2,7 @@ API
 ==================
 
 .. toctree::
-   :maxdepth: 8
+   :maxdepth: 2
    :caption: Clients
 
    supra_sdk.clients

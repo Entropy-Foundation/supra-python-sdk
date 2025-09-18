@@ -4,64 +4,23 @@
 
 The `supra-python-sdk` provides a seamless interface for interacting with the Supra-L1 network. It offers comprehensive support for `move-vm` operations and transactions, enabling developers to both query on-chain data and submit `move-vm` based transactions with ease.
 
-## Requirements
+- Python 3.12+ support
 
-This SDK uses [uv](https://docs.astral.sh/uv/) for packaging and dependency management.  
+## Installation
 
-### Step 1: Install `uv`
-
-Follow the official [installation guide](https://docs.astral.sh/uv/getting-started/installation/).
-
-### Step 2: Set up the environment
-
-Once `uv` is installed, run the following command to create a virtual environment and install all dependencies:
-
-```bash
-uv sync
+```sh
+python -m pip install supra-sdk
 ```
 
-## Run and Test SDK
+## Usage
 
-> Since the Supra-L1 network codebase is not publicly available, the test cases in `async_client.py` uses testnet rpc-url by default. However, if you are an internal contributor with access to the codebase, you can replace the testnet rpc-url with a localnet rpc-url to run the tests with a local network.
+Check [examples](https://github.com/Entropy-Foundation/supra-python-sdk/blob/master/examples/README.md) section.
 
-Follow to run the local network using `smr-moonshot`:
+## Reference Docs
 
-```bash
-cd remote_env/
-make killall
-./local_test.sh -t daemon -n
-```
+For the function specific documentation, check out the `supra-python-sdk` [reference documentation](https://supra-python-sdk.docs.supra.com/).
 
-> Unit tests
+## Contributing
 
-```bash
-make test
-```
-
-> Test coverage
-
-```bash
-make test-coverage
-```
-
-> Run examples
-
-```bash
-make examples
-```
-
-## Autoformatting
-
-```bash
-make fmt
-```
-
-## Autolinting
-
-```bash
-make lint
-```
-
-## Semantic versioning
-
-This project follows [semver](https://semver.org/) as closely as possible
+If you found a bug or would like to request a feature, please file an [issue](https://github.com/Entropy-Foundation/supra-python-sdk/issues/new).
+If, based on the discussion on an issue, you would like to offer a code change, please make a [pull request](https://github.com/Entropy-Foundation/supra-python-sdk/pulls).
