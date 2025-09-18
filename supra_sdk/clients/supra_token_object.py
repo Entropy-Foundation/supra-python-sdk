@@ -335,14 +335,23 @@ class ReadObject:
         return response
 
 
-class SupraTokenClient:
-    """A wrapper around reading and mutating Digital Assets also known as Token Objects"""
+class SupraTokenObjectClient:
+    """A class that provides convenient methods to interact with the `aptos-token-package` package.
+
+    Args:
+        client (SupraClient): Instance of the `SupraClient` class used for interacting with rpc-node.
+    """
 
     client: SupraClient
 
     PAGINATION_COUNT: int = 100
 
     def __init__(self, client: SupraClient):
+        """Initializes a `SupraTokenObjectClient` instance.
+
+        Args:
+            client (SupraClient): Instance of the `SupraClient` class.
+        """
         self.client = client
 
     async def read_object(self, address: AccountAddress) -> ReadObject:
@@ -425,7 +434,7 @@ class SupraTokenClient:
         royalty_numerator: int,
         royalty_denominator: int,
     ) -> str:
-        payload = SupraTokenClient.create_collection_payload(
+        payload = SupraTokenObjectClient.create_collection_payload(
             description,
             max_supply,
             name,
@@ -490,7 +499,7 @@ class SupraTokenClient:
         uri: str,
         properties: PropertyMap,
     ) -> str:  # <:!:mint_token
-        payload = SupraTokenClient.mint_token_payload(
+        payload = SupraTokenObjectClient.mint_token_payload(
             collection, description, name, uri, properties
         )
         signed_transaction = await self.client.create_signed_transaction(

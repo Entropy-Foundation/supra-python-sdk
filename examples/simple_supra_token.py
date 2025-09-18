@@ -9,12 +9,12 @@ from examples.common import RPC_NODE_URL
 from supra_sdk.account import Account
 from supra_sdk.account_address import AccountAddress
 from supra_sdk.clients.rest import SupraClient
-from supra_sdk.supra_token_client import (
+from supra_sdk.clients.supra_token_object import (
     Collection,
     Object,
     PropertyMap,
     ReadObject,
-    SupraTokenClient,
+    SupraTokenObjectClient,
     Token,
 )
 
@@ -24,7 +24,7 @@ def get_owner(obj: ReadObject) -> AccountAddress:
 
 
 async def get_collection_data(
-    token_client: SupraTokenClient, collection_addr: AccountAddress
+    token_client: SupraTokenObjectClient, collection_addr: AccountAddress
 ) -> dict[str, str]:
     collection = (await token_client.read_object(collection_addr)).resources[Collection]
     return {
@@ -36,7 +36,7 @@ async def get_collection_data(
 
 
 async def get_token_data(
-    token_client: SupraTokenClient, token_addr: AccountAddress
+    token_client: SupraTokenObjectClient, token_addr: AccountAddress
 ) -> dict[str, str]:
     token = (await token_client.read_object(token_addr)).resources[Token]
     return {
@@ -50,7 +50,7 @@ async def get_token_data(
 
 async def main():
     supra_client = SupraClient(RPC_NODE_URL)
-    token_client = SupraTokenClient(supra_client)
+    token_client = SupraTokenObjectClient(supra_client)
 
     alice = Account.generate()
     bob = Account.generate()

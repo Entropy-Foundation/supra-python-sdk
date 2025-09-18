@@ -72,22 +72,6 @@ Metadata
    :show-inheritance:
    :undoc-members:
 
-Supra Token Client
---------------------------------------
-
-.. automodule:: supra_sdk.supra_token_client
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
-Supra TokenV1 Client
-----------------------------------------
-
-.. automodule:: supra_sdk.supra_tokenv1_client
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
 Transactions
 ------------------------------
 

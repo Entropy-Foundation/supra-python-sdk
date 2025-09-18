@@ -8,12 +8,17 @@ from examples.common import RPC_NODE_URL
 from supra_sdk.account import Account
 from supra_sdk.account_address import AccountAddress
 from supra_sdk.clients.rest import SupraClient
-from supra_sdk.supra_token_client import Object, Property, PropertyMap, SupraTokenClient
+from supra_sdk.clients.supra_token_object import (
+    Object,
+    Property,
+    PropertyMap,
+    SupraTokenObjectClient,
+)
 
 
 async def main():
     supra_client = SupraClient(RPC_NODE_URL)
-    token_client = SupraTokenClient(supra_client)
+    token_client = SupraTokenObjectClient(supra_client)
 
     alice = Account.generate()
     bob = Account.generate()
