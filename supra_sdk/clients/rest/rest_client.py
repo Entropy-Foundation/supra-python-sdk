@@ -18,7 +18,7 @@ class RestClient:
     api_client: ApiClient
 
     def __init__(self, api_client: ApiClient):
-        """Initialize a `RestClient` instance.
+        """Initializes a `RestClient` instance.
 
         Args:
             api_client (supra_sdk.clients.api_client.ApiClient): An instance of `ApiClient` responsible for managing HTTP requests.

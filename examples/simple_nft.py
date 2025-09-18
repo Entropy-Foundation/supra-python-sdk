@@ -7,13 +7,13 @@ import json
 
 from examples.common import RPC_NODE_URL
 from supra_sdk.account import Account
+from supra_sdk.clients import SupraTokenClient
 from supra_sdk.clients.rest import SupraClient
-from supra_sdk.supra_tokenv1_client import SupraTokenV1Client
 
 
 async def main():
     supra_client = SupraClient(RPC_NODE_URL)
-    token_client = SupraTokenV1Client(supra_client)
+    token_client = SupraTokenClient(supra_client)
 
     alice = Account.generate()
     bob = Account.generate()
@@ -54,7 +54,7 @@ async def main():
     )
     print(f"Alice's token balance: {balance}")
     token_data = await token_client.get_token_data(
-        alice.address(), collection_name, token_name, property_version
+        alice.address(), collection_name, token_name
     )
     print(f"Alice's token data: {json.dumps(token_data, indent=4, sort_keys=True)}")
 

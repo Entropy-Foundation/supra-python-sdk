@@ -18,12 +18,21 @@ from supra_sdk.transactions import (
 U64_MAX = 18446744073709551615
 
 
-class SupraTokenV1Client:
-    """A wrapper around reading and mutating SupraTokens also known as Token Objects"""
+class SupraTokenClient:
+    """A class that provides convenient methods to interact with the `aptos-token` package.
+
+    Args:
+        client (SupraClient): Instance of the `SupraClient` class used for interacting with rpc-node.
+    """
 
     client: SupraClient
 
     def __init__(self, client: SupraClient):
+        """Initializes a `SupraTokenClient` instance.
+
+        Args:
+            client (SupraClient): Instance of the `SupraClient` class.
+        """
         self.client = client
 
     async def create_collection(
@@ -185,10 +194,6 @@ class SupraTokenV1Client:
         )
         return await self.client.submit_transaction(signed_transaction)
 
-    """
-    Token accessors
-    """
-
     async def get_token(
         self,
         owner: AccountAddress,
@@ -241,7 +246,6 @@ class SupraTokenV1Client:
         creator: AccountAddress,
         collection_name: str,
         token_name: str,
-        _property_version: int,
     ) -> Any:
         resource = await self.client.account_resource(
             creator, "0x3::token::Collections"

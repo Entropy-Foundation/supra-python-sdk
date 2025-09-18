@@ -15,3 +15,20 @@ Api Client
    :members:
    :show-inheritance:
    :undoc-members:
+
+
+Supra Token
+-------------------------------------
+
+.. automodule:: supra_sdk.clients.supra_token
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
+Supra Token Object
+-------------------------------------
+
+.. automodule:: supra_sdk.clients.supra_token_object
+   :members:
+   :show-inheritance:
+   :undoc-members:
