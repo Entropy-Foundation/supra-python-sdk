@@ -48,7 +48,8 @@ class TransactionConfig:
     Attributes:
         expiration_ttl (int): Time-to-live, in seconds, before a transaction expires and is rejected by the network.
             Defaults to 600.
-        gas_unit_price (int): Price per unit of gas used to execute the transaction. Defaults to 100.
+        gas_unit_price (int): Price per unit of gas used to execute the transaction. Defaults to
+            `min_configured_gas_price` obtained from `rpc/v3/transactions/estimate_gas_price` endpoint.
         max_gas_amount (int): Maximum number of gas units allowed per transaction. Defaults to 500,000.
         transaction_wait_time_in_seconds (int): Number of seconds to wait for a transaction to be executed before timing
             out. Defaults to 20.
@@ -60,7 +61,7 @@ class TransactionConfig:
     """
 
     expiration_ttl: int = 600
-    gas_unit_price: int = 100
+    gas_unit_price: int | None = None
     max_gas_amount: int = 500_000
     transaction_wait_time_in_seconds: int = 20
     polling_wait_time_in_seconds: int = 1
@@ -98,7 +99,8 @@ class SupraClient(
 
     Attributes:
         _chain_id (int | None): The chain-id of the network.
-        api_client (supra_sdk.clients.api_client.ApiClient): Inherited from `RestClient`. Used to send HTTP requests to the Supra RPC node.
+        api_client (supra_sdk.clients.api_client.ApiClient): Inherited from `RestClient`. Used to send HTTP requests to
+            the Supra RPC node.
 
     """
 
@@ -305,7 +307,8 @@ class SupraClient(
             sequence_number,
             transaction_payload,
             self.transaction_config.max_gas_amount,
-            self.transaction_config.gas_unit_price,
+            self.transaction_config.gas_unit_price
+            or (await self.estimate_gas_price())["min_configured_gas_price"],
             int(time.time()) + self.transaction_config.expiration_ttl,
             await self.chain_id(),
         )
