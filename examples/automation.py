@@ -16,7 +16,7 @@ from supra_sdk.transactions import EntryFunction, TransactionArgument
 async def main():
     supra_client_config = SupraClientConfig(
         expiration_ttl=300,
-        gas_unit_price=100,
+        gas_unit_price=100_000,
         max_gas_amount=100_000,
     )
     supra_client = SupraClient(RPC_NODE_URL, supra_client_config)
