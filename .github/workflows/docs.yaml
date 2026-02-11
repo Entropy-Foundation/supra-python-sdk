@@ -28,14 +28,21 @@ jobs:
         run: |
           make build-docs
 
-      - name: Set up gcloud CLI
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_DEVNET_MISC_SERVICE_ACCOUNT_KEY }}
+      # (Optional but recommended) Ensure AWS CLI is available
+      - name: Install AWS CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y awscli
 
-      - name: Upload docs to GCS
-        uses: google-github-actions/upload-cloud-storage@v2
+      - name: Configure AWS CLI for Cloudflare R2
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          path: docs/_build
-          destination: ${{ vars.DOCS_BUCKET }}
-          parent: false
+          aws-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          aws-region: auto
+
+      - name: Upload docs to Cloudflare R2
+        run: |
+          aws s3 sync docs/_build/html s3://${{ vars.R2_BUCKET_NAME }} \
+            --endpoint-url https://${{ vars.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com \
+            --delete
