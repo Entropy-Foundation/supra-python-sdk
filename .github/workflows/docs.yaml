@@ -38,7 +38,29 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
         run: |
+          # Debug: Check if variables are set
+          if [ -z "$R2_ACCOUNT_ID" ]; then
+            echo "ERROR: R2_ACCOUNT_ID variable is not set!"
+            exit 1
+          fi
+          if [ -z "$R2_BUCKET_NAME" ]; then
+            echo "ERROR: R2_BUCKET_NAME variable is not set!"
+            exit 1
+          fi
+          if [ -z "$R2_ACCESS_KEY_ID" ]; then
+            echo "ERROR: R2_ACCESS_KEY_ID secret is not set!"
+            exit 1
+          fi
+          if [ -z "$R2_SECRET_ACCESS_KEY" ]; then
+            echo "ERROR: R2_SECRET_ACCESS_KEY secret is not set!"
+            exit 1
+          fi
+          
+          echo "R2_ACCOUNT_ID: ${R2_ACCOUNT_ID}"
+          echo "R2_BUCKET_NAME: ${R2_BUCKET_NAME}"
+          
           mkdir -p ~/.config/rclone
           cat << EOF > ~/.config/rclone/rclone.conf
           [r2]
@@ -51,6 +73,8 @@ jobs:
           EOF
       
       - name: Upload docs to Cloudflare R2
+        env:
+          R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
         run: |
-          rclone sync docs/_build r2:${{ vars.R2_BUCKET_NAME }} \
+          rclone sync docs/_build r2:${R2_BUCKET_NAME} \
             --progress
