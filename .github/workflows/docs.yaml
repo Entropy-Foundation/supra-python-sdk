@@ -9,38 +9,38 @@ jobs:
   docs:
     name: Build and Deploy Docs
     runs-on: ubuntu-latest
-
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
+      
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
+      
       - name: Install dependencies
         run: |
           pip install uv
           uv sync
-
+      
       - name: Build docs
         run: |
           make build-docs
-
-      # (Optional but recommended) Ensure AWS CLI is available
-      - name: Install AWS CLI
+      
+      - name: Install AWS CLI v2
         run: |
-          sudo apt-get update
-          sudo apt-get install -y awscli
-
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          sudo ./aws/install
+      
       - name: Configure AWS CLI for Cloudflare R2
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           aws-region: auto
-
+      
       - name: Upload docs to Cloudflare R2
         run: |
           aws s3 sync docs/_build/html s3://${{ vars.R2_BUCKET_NAME }} \
