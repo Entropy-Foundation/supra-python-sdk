@@ -53,6 +53,4 @@ jobs:
       - name: Upload docs to Cloudflare R2
         run: |
           rclone sync docs/_build/html r2:${{ vars.R2_BUCKET_NAME }} \
-            --progress \
-            --delete-during \
-            --fast-list
+            --progress
