@@ -372,6 +372,73 @@ class TestMaxGas(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(raw.max_gas_amount, 300)
 
+    def pipelined_node(self, depends_on_uncommitted: bool = False) -> FakeNode:
+        """A node whose account is at sequence number 3 and that refuses numbers above it."""
+        node = FakeNode()
+        node.sequence_number = 3
+
+        def simulation() -> httpx.Response:
+            number = decode_simulated(node.simulated[-1]).transaction.sequence_number
+            if number > 3:
+                return httpx.Response(
+                    200,
+                    json={
+                        "status": "PendingAfterExecution",
+                        "output": {
+                            "Move": {
+                                "gas_used": 0,
+                                "vm_status": "Transaction Validation failed: "
+                                "ValidationFailed(..., SEQUENCE_NUMBER_TOO_NEW)",
+                            }
+                        },
+                    },
+                )
+            if depends_on_uncommitted:
+                return httpx.Response(200, json=simulation_result(0, "Fail"))
+            return httpx.Response(200, json=simulation_result(4_000))
+
+        node.simulation = simulation
+        return node
+
+    async def test_too_new_number_is_simulated_at_the_chain_number(self):
+        node = self.pipelined_node()
+        client = make_client(node)
+        self.addAsyncCleanup(client.close)
+        signed = await client.create_signed_transaction(
+            Account.generate(), transfer_payload(), sequence_number=5
+        )
+        self.assertEqual(signed.transaction.max_gas_amount, 6_000)
+        self.assertEqual(signed.transaction.sequence_number, 5)
+        self.assertTrue(signed.verify())
+        numbers = [
+            decode_simulated(body).transaction.sequence_number
+            for body in node.simulated
+        ]
+        self.assertEqual(numbers, [5, 3])
+        self.assertEqual(len([r for r in node.requests if "/accounts/" in r[1]]), 1)
+
+    async def test_number_at_the_chain_number_is_simulated_once(self):
+        node = self.pipelined_node()
+        client = make_client(node)
+        self.addAsyncCleanup(client.close)
+        raw = await client.create_raw_transaction(
+            Account.generate(), transfer_payload(), sequence_number=3
+        )
+        self.assertEqual(raw.sequence_number, 3)
+        self.assertEqual(node.count(*SIMULATE), 1)
+
+    async def test_failure_at_the_chain_number_raises(self):
+        node = self.pipelined_node(depends_on_uncommitted=True)
+        client = make_client(node)
+        self.addAsyncCleanup(client.close)
+        with self.assertRaises(MaxGasEstimationError) as context:
+            await client.create_raw_transaction(
+                Account.generate(), transfer_payload(), sequence_number=5
+            )
+        self.assertEqual(context.exception.status, "Fail")
+        self.assertIn("set max_gas_amount", str(context.exception))
+        self.assertEqual(node.count(*SIMULATE), 2)
+
     async def test_signed_transaction_keeps_a_valid_signature(self):
         node = FakeNode()
         client = make_client(node)

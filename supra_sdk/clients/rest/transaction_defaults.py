@@ -75,6 +75,20 @@ def affordable_gas_amount(balance: int, gas_unit_price: int) -> int:
     return min(balance // gas_unit_price, MAX_GAS_AMOUNT_PER_TRANSACTION)
 
 
+def is_sequence_number_too_new(simulation: dict[str, Any]) -> bool:
+    """Returns whether the simulation was refused because the sequence number is ahead of the account's on the chain.
+
+    Nodes v11.7.0 and v12 report such a simulation with status `PendingAfterExecution` and the name of the VM status
+    code, `SEQUENCE_NUMBER_TOO_NEW`, in `output.Move.vm_status`.
+    """
+    if simulation.get("status") != "PendingAfterExecution":
+        return False
+    output = simulation.get("output")
+    move_output = output.get("Move") if isinstance(output, dict) else None
+    vm_status = move_output.get("vm_status") if isinstance(move_output, dict) else None
+    return isinstance(vm_status, str) and "SEQUENCE_NUMBER_TOO_NEW" in vm_status
+
+
 def max_gas_from_simulation(simulation: dict[str, Any], affordable: int) -> int:
     """Returns the max gas to submit with, from the result of a simulation that ran with `affordable` max gas.
 

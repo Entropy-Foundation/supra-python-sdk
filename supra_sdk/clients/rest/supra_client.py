@@ -29,6 +29,7 @@ from supra_sdk.clients.rest.transaction_defaults import (
     MaxGasEstimationError,
     affordable_gas_amount,
     default_expiration_timestamp,
+    is_sequence_number_too_new,
     max_gas_from_simulation,
 )
 from supra_sdk.transactions import (
@@ -397,8 +398,10 @@ class SupraClient(
         if the sender's balance covers `max_gas_amount * gas_unit_price`, so an estimate needs a balance of at least the
         gas used times the gas unit price. When `sender` is only an address there is no key to simulate with, and the
         max gas amount is 20,000 units, at most what the balance pays for. The estimate is made against the node's
-        current state; a transaction whose sequence number is ahead of the account's, or that depends on a transaction
-        not yet committed, does not simulate to `Success`: set `max_gas_amount` for it.
+        committed state. When the simulation reports the sequence number as ahead of the account's on the chain (a
+        transaction sent behind uncommitted ones), the account's sequence number is read and the transaction is
+        simulated again with that number; the returned transaction keeps `sequence_number`. A transaction that depends
+        on an uncommitted one does not simulate to `Success` even then: set `max_gas_amount` for it.
 
         Args:
             sender (Account | AccountAddress): The account object or its address.
@@ -448,10 +451,14 @@ class SupraClient(
         expiration_timestamp = await self._expiration_timestamp()
         chain_id = await self.chain_id()
 
-        def build(max_gas: int) -> RawTransaction:
+        def build(max_gas: int, sequence_number: int | None = None) -> RawTransaction:
             return RawTransaction(
                 sender_address,
-                resolved_sequence_number,
+                (
+                    resolved_sequence_number
+                    if sequence_number is None
+                    else sequence_number
+                ),
                 transaction_payload,
                 max_gas,
                 gas_unit_price,
@@ -465,15 +472,37 @@ class SupraClient(
             if to_signed is None and isinstance(sender, Account):
                 to_signed = _single_signer(sender)
             max_gas_amount = await self._estimate_max_gas_amount(
-                gas_payer or sender_address, gas_unit_price, build, to_signed
+                sender_address,
+                gas_payer or sender_address,
+                gas_unit_price,
+                build,
+                to_signed,
             )
         return build(max_gas_amount)
 
+    async def _simulate_unsigned(
+        self,
+        raw_transaction: RawTransaction,
+        to_signed: Callable[[RawTransaction], SignedTransaction],
+    ) -> dict[str, Any]:
+        """Simulates an unsigned copy of the transaction that `to_signed` builds; the transaction is not changed."""
+        signed = to_signed(raw_transaction)
+        authenticator_clone = copy.deepcopy(signed.authenticator)
+        authenticator_clone.unset_signature()
+        unsigned_copy = SignedTransaction(signed.transaction, authenticator_clone)
+        try:
+            return await self.simulate(SupraTransaction(unsigned_copy).to_bytes())
+        except ApiError as error:
+            raise MaxGasEstimationError(
+                f"Simulation of the transaction to estimate max gas failed: {error}; set max_gas_amount"
+            ) from error
+
     async def _estimate_max_gas_amount(
         self,
+        sender_address: AccountAddress,
         gas_payer: AccountAddress,
         gas_unit_price: int,
-        build: Callable[[int], RawTransaction],
+        build: Callable[[int, int | None], RawTransaction],
         to_signed: Callable[[RawTransaction], SignedTransaction] | None,
     ) -> int:
         try:
@@ -491,17 +520,35 @@ class SupraClient(
             )
         if to_signed is None:
             return min(FALLBACK_MAX_GAS_AMOUNT, affordable)
-        signed = to_signed(build(affordable))
-        authenticator_clone = copy.deepcopy(signed.authenticator)
-        authenticator_clone.unset_signature()
-        unsigned_copy = SignedTransaction(signed.transaction, authenticator_clone)
+        raw_transaction = build(affordable, None)
+        simulation = await self._simulate_unsigned(raw_transaction, to_signed)
+        if not is_sequence_number_too_new(simulation):
+            return max_gas_from_simulation(simulation, affordable)
+
+        # A transaction sent behind uncommitted ones of the same account: the simulation runs on committed state, so
+        # it is repeated at the account's sequence number on the chain. The submitted transaction keeps its own.
         try:
-            simulation = await self.simulate(SupraTransaction(unsigned_copy).to_bytes())
+            chain_sequence_number = await self.account_sequence_number(sender_address)
         except ApiError as error:
             raise MaxGasEstimationError(
-                f"Simulation of the transaction to estimate max gas failed: {error}; set max_gas_amount"
+                f"The sequence number {raw_transaction.sequence_number} is ahead of the account's, and reading the "
+                f"account's sequence number failed: {error}; set max_gas_amount"
             ) from error
-        return max_gas_from_simulation(simulation, affordable)
+        simulation = await self._simulate_unsigned(
+            build(affordable, chain_sequence_number), to_signed
+        )
+        try:
+            return max_gas_from_simulation(simulation, affordable)
+        except MaxGasEstimationError as error:
+            raise MaxGasEstimationError(
+                f"The sequence number {raw_transaction.sequence_number} is ahead of the account's on the chain "
+                f"({chain_sequence_number}) and the simulation at the chain's number did not succeed "
+                f"(status: {error.status}, vm_status: {error.vm_status}); if the transaction depends on an "
+                "uncommitted transaction, set max_gas_amount",
+                error.status,
+                error.vm_status,
+                error.simulation,
+            ) from error
 
     async def _expiration_timestamp(self) -> int:
         ttl = self.transaction_config.expiration_ttl
