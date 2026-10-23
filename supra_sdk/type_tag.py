@@ -6,9 +6,26 @@ from __future__ import annotations
 
 import re
 import typing
+import warnings
 
 from supra_sdk.account_address import AccountAddress
 from supra_sdk.bcs import Deserializable, Deserializer, Serializable, Serializer
+
+# The Move type-tag nesting limit: ``MAX_TYPE_TAG_NESTING`` (9) in
+# ``third_party/move/move-core/types/src/safe_serialize.rs`` of the aptos-core fork
+# (tag ``aptosvm-v1.16_supra-v1.8.17``), enforced by its ``parse_type_tag`` as
+# ``depth >= MAX_TYPE_TAG_NESTING``. A type tag may nest ``vector`` and struct type
+# arguments at most 8 levels deep; the same bound applies to parsing and to
+# deserialisation here.
+MAX_TYPE_TAG_NESTING = 9
+
+
+def _check_depth(depth: int) -> None:
+    if depth >= MAX_TYPE_TAG_NESTING:
+        raise ValueError(
+            f"Type tag nesting exceeds the Move type-tag nesting limit "
+            f"({MAX_TYPE_TAG_NESTING})"
+        )
 
 
 class TypeTag(Deserializable, Serializable):
@@ -46,6 +63,9 @@ class TypeTag(Deserializable, Serializable):
             self.value.variant() == other.value.variant() and self.value == other.value
         )
 
+    def __hash__(self) -> int:
+        return hash((self.value.variant(), self.value))
+
     def __str__(self):
         return self.value.__str__()
 
@@ -57,20 +77,28 @@ class TypeTag(Deserializable, Serializable):
         """Parse a type such as ``u64``, ``vector<u8>`` or
         ``0x1::option::Option<vector<u8>>``.
 
-        Raises ``ValueError`` if the string is not a well-formed type.
+        Raises ``ValueError`` if the string is not a well-formed type or nests deeper
+        than the Move type-tag nesting limit (``MAX_TYPE_TAG_NESTING``).
         """
         return _TypeTagParser(type_tag).parse()
 
     @staticmethod
     def deserialize(deserializer: Deserializer) -> TypeTag:
+        """Raises ``ValueError`` for an unknown variant or for nesting deeper than the
+        Move type-tag nesting limit (``MAX_TYPE_TAG_NESTING``)."""
+        return TypeTag._deserialize(deserializer, 0)
+
+    @staticmethod
+    def _deserialize(deserializer: Deserializer, depth: int) -> TypeTag:
+        _check_depth(depth)
         variant = deserializer.uleb128()
         primitive = _PRIMITIVE_TAGS_BY_VARIANT.get(variant)
         if primitive is not None:
             return TypeTag(primitive.deserialize(deserializer))
         if variant == TypeTag.VECTOR:
-            return TypeTag(VectorTag.deserialize(deserializer))
+            return TypeTag(VectorTag._deserialize(deserializer, depth))
         if variant == TypeTag.STRUCT:
-            return TypeTag(StructTag.deserialize(deserializer))
+            return TypeTag(StructTag._deserialize(deserializer, depth))
         raise ValueError(f"Unknown type tag variant {variant}")
 
     def serialize(self, serializer: Serializer):
@@ -91,7 +119,13 @@ class _PrimitiveTag(Deserializable, Serializable):
     NAME: typing.ClassVar[str]
 
     def __init__(self, value: typing.Any = None):
-        pass
+        if value is not None:
+            warnings.warn(
+                f"{type(self).__name__}() takes no value; the value argument is "
+                "ignored and will be removed",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, _PrimitiveTag):
@@ -183,19 +217,32 @@ _PRIMITIVE_TAGS_BY_NAME: dict[str, type[_PrimitiveTag]] = {
 
 
 class VectorTag(Deserializable, Serializable):
-    """``vector<T>``. ``value`` is the element ``TypeTag``."""
+    """``vector<T>``. ``value`` is the element ``TypeTag``.
+
+    The argument is a ``TypeTag`` or a bare tag (``U8Tag()``, ``StructTag(...)``,
+    another ``VectorTag``), which is wrapped in a ``TypeTag``. Anything else, including
+    a string, raises ``TypeError``; parse text explicitly with ``TypeTag.from_str``.
+    """
 
     value: TypeTag
 
     def __init__(self, value: typing.Any):
-        if not isinstance(value, TypeTag):
+        if isinstance(value, (_PrimitiveTag, VectorTag, StructTag)):
             value = TypeTag(value)
+        elif not isinstance(value, TypeTag):
+            raise TypeError(
+                "VectorTag takes a TypeTag or a tag class instance, "
+                f"not {type(value).__name__}"
+            )
         self.value = value
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, VectorTag):
             return NotImplemented
         return self.value == other.value
+
+    def __hash__(self) -> int:
+        return hash((TypeTag.VECTOR, self.value))
 
     def __str__(self):
         return f"vector<{self.value}>"
@@ -208,7 +255,11 @@ class VectorTag(Deserializable, Serializable):
 
     @staticmethod
     def deserialize(deserializer: Deserializer) -> VectorTag:
-        return VectorTag(TypeTag.deserialize(deserializer))
+        return VectorTag._deserialize(deserializer, 0)
+
+    @staticmethod
+    def _deserialize(deserializer: Deserializer, depth: int) -> VectorTag:
+        return VectorTag(TypeTag._deserialize(deserializer, depth + 1))
 
     def serialize(self, serializer: Serializer):
         self.value.serialize(serializer)
@@ -236,6 +287,11 @@ class StructTag(Deserializable, Serializable):
             and self.type_args == other.type_args
         )
 
+    def __hash__(self) -> int:
+        return hash(
+            (self.address.address, self.module, self.name, tuple(self.type_args))
+        )
+
     def __str__(self) -> str:
         value = f"{self.address}::{self.module}::{self.name}"
         if len(self.type_args) > 0:
@@ -252,8 +308,9 @@ class StructTag(Deserializable, Serializable):
     def from_str(type_tag: str) -> StructTag:
         """Parse a struct such as ``0x1::option::Option<vector<u8>>``.
 
-        Type arguments may be any type, nested to any depth. Raises ``ValueError`` if
-        the string is malformed or is not a struct.
+        Type arguments may be any type, nested up to the Move type-tag nesting limit.
+        Raises ``ValueError`` if the string is malformed, nests deeper than that limit,
+        or is not a struct.
         """
         parsed = TypeTag.from_str(type_tag).value
         if not isinstance(parsed, StructTag):
@@ -265,10 +322,14 @@ class StructTag(Deserializable, Serializable):
 
     @staticmethod
     def deserialize(deserializer: Deserializer) -> StructTag:
+        return StructTag._deserialize(deserializer, 0)
+
+    @staticmethod
+    def _deserialize(deserializer: Deserializer, depth: int) -> StructTag:
         address = deserializer.struct(AccountAddress)
         module = deserializer.str()
         name = deserializer.str()
-        type_args = deserializer.sequence(TypeTag.deserialize)
+        type_args = deserializer.sequence(lambda d: TypeTag._deserialize(d, depth + 1))
         return StructTag(address, module, name, type_args)
 
     def serialize(self, serializer: Serializer):
@@ -279,7 +340,11 @@ class StructTag(Deserializable, Serializable):
 
 
 _TOKEN = re.compile(r"\s*(::|<|>|,|[A-Za-z0-9_]+)")
-_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_TRAILING_WHITESPACE = re.compile(r"\s*\Z")
+# The identifier rule of ``identifier.rs`` in move-core: a letter followed by letters,
+# digits or underscores, or an underscore followed by at least one of those.
+_IDENTIFIER = re.compile(r"(?:[A-Za-z][A-Za-z0-9_]*|_[A-Za-z0-9_]+)\Z")
+_PUNCTUATION = ("::", "<", ">", ",")
 
 
 class _TypeTagParser:
@@ -289,7 +354,7 @@ class _TypeTagParser:
         self.text = text
         self.tokens: list[str] = []
         position = 0
-        while text[position:].strip():
+        while not _TRAILING_WHITESPACE.match(text, position):
             match = _TOKEN.match(text, position)
             if match is None:
                 raise self._error(f"unexpected character at offset {position}")
@@ -322,24 +387,30 @@ class _TypeTagParser:
         return token
 
     def parse(self) -> TypeTag:
-        tag = self._type()
+        tag = self._type(0)
         if self._peek() is not None:
             raise self._error(f"unexpected {self._peek()!r} after the type")
         return tag
 
-    def _type(self) -> TypeTag:
+    def _type(self, depth: int) -> TypeTag:
+        if depth >= MAX_TYPE_TAG_NESTING:
+            raise self._error(
+                f"nesting exceeds the Move type-tag nesting limit ({MAX_TYPE_TAG_NESTING})"
+            )
         token = self._next()
+        if token in _PUNCTUATION:
+            raise self._error(f"expected a type, found {token!r}")
         primitive = _PRIMITIVE_TAGS_BY_NAME.get(token)
         if primitive is not None:
             return TypeTag(primitive())
         if token == "vector":
             self._expect("<")
-            inner = self._type()
+            inner = self._type(depth + 1)
             self._expect(">")
             return TypeTag(VectorTag(inner))
-        return self._struct(token)
+        return self._struct(token, depth)
 
-    def _struct(self, address_token: str) -> TypeTag:
+    def _struct(self, address_token: str, depth: int) -> TypeTag:
         try:
             address = AccountAddress.from_str_relaxed(address_token)
         except (RuntimeError, ValueError):
@@ -353,9 +424,11 @@ class _TypeTagParser:
         type_args: list[TypeTag] = []
         if self._peek() == "<":
             self._next()
-            type_args.append(self._type())
+            type_args.append(self._type(depth + 1))
             while self._peek() == ",":
                 self._next()
-                type_args.append(self._type())
+                if self._peek() == ">":
+                    raise self._error("trailing comma in the type arguments")
+                type_args.append(self._type(depth + 1))
             self._expect(">")
         return TypeTag(StructTag(address, module, name, type_args))

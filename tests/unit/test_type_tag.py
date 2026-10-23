@@ -14,10 +14,12 @@ enum in ``language_storage.rs`` of the aptos-core fork (tag ``aptosvm-v1.16_supr
 from __future__ import annotations
 
 import unittest
+import warnings
 
 from supra_sdk.account_address import AccountAddress
 from supra_sdk.bcs import Deserializer, Serializer
 from supra_sdk.type_tag import (
+    MAX_TYPE_TAG_NESTING,
     AccountAddressTag,
     BoolTag,
     SignerTag,
@@ -131,11 +133,153 @@ class TypeTagSerialisationTest(unittest.TestCase):
                 self.assertEqual(tag.to_bytes(), TypeTag.from_str(text).to_bytes())
 
     def test_primitive_tag_ignores_legacy_value_argument(self):
-        self.assertEqual(TypeTag(U64Tag(0)).to_bytes().hex(), "02")
-        self.assertEqual(TypeTag(U64Tag(12345)).to_bytes().hex(), "02")
-        self.assertEqual(TypeTag(BoolTag(True)).to_bytes().hex(), "00")
-        self.assertEqual(U64Tag(7), U64Tag())
+        with self.assertWarns(DeprecationWarning):
+            legacy = U64Tag(0)
+        self.assertEqual(TypeTag(legacy).to_bytes().hex(), "02")
+        with self.assertWarns(DeprecationWarning):
+            self.assertEqual(TypeTag(U64Tag(12345)).to_bytes().hex(), "02")
+        with self.assertWarns(DeprecationWarning):
+            self.assertEqual(TypeTag(BoolTag(True)).to_bytes().hex(), "00")
+        self.assertEqual(legacy, U64Tag())
         self.assertNotEqual(TypeTag(U64Tag()), TypeTag(U8Tag()))
+
+    def test_primitive_tag_warning_says_the_value_is_ignored(self):
+        with self.assertWarnsRegex(DeprecationWarning, "ignored"):
+            SignerTag(1)
+
+    def test_primitive_tag_without_value_does_not_warn(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            for tag in (BoolTag, U8Tag, U16Tag, U32Tag, U64Tag, U128Tag, U256Tag):
+                tag()
+            AccountAddressTag()
+            SignerTag()
+            TypeTag.from_str("vector<0x1::a::B<u8, address>>")
+
+    def test_vector_tag_rejects_non_tags(self):
+        for value in ("u8", "vector<u8>", 1, None, b"\x01", [U8Tag()], U8Tag):
+            with self.subTest(repr(value)), self.assertRaises(TypeError):
+                VectorTag(value)
+
+    def test_vector_tag_accepts_every_tag_kind(self):
+        struct = StructTag.from_str("0x1::a::B")
+        self.assertEqual(VectorTag(struct), VectorTag(TypeTag(struct)))
+        self.assertEqual(
+            VectorTag(VectorTag(U8Tag())), VectorTag(TypeTag.from_str("vector<u8>"))
+        )
+        self.assertEqual(VectorTag(SignerTag()), VectorTag(TypeTag(SignerTag())))
+
+    def test_hash_matches_equality(self):
+        for text, _ in FIXTURES:
+            with self.subTest(text):
+                a = TypeTag.from_str(text)
+                b = TypeTag.from_str(text)
+                self.assertEqual(hash(a), hash(b))
+                self.assertEqual(hash(a.value), hash(b.value))
+        self.assertEqual(
+            hash(TypeTag.from_str("0x1::a::B")),
+            hash(TypeTag.from_str(f"0x{ONE}::a::B")),
+        )
+        self.assertEqual(hash(U64Tag()), hash(U64Tag()))
+        self.assertEqual(
+            len({TypeTag.from_str("vector<u8>"), TypeTag.from_str("vector< u8 >")}), 1
+        )
+        distinct = {
+            TypeTag.from_str("vector<u8>"),
+            TypeTag.from_str("vector<u16>"),
+            TypeTag.from_str("u8"),
+        }
+        self.assertEqual(len(distinct), 3)
+        self.assertIn(
+            TypeTag.from_str("0x1::a::B<u8>"), {TypeTag.from_str("0x1::a::B<u8>")}
+        )
+        self.assertNotIn(
+            TypeTag.from_str("0x1::a::B<u8>"), {TypeTag.from_str("0x1::a::B<u16>")}
+        )
+
+    def test_nesting_limit_in_the_parser(self):
+        limit = MAX_TYPE_TAG_NESTING - 1
+        self.assertEqual(limit, 8)
+        TypeTag.from_str("vector<" * limit + "u8" + ">" * limit)
+        with self.assertRaisesRegex(ValueError, "nesting"):
+            TypeTag.from_str("vector<" * (limit + 1) + "u8" + ">" * (limit + 1))
+        TypeTag.from_str("0x1::a::B<" * limit + "u8" + ">" * limit)
+        with self.assertRaisesRegex(ValueError, "nesting"):
+            TypeTag.from_str("0x1::a::B<" * (limit + 1) + "u8" + ">" * (limit + 1))
+        mixed = "vector<0x1::a::B<" * 4 + "u8" + ">>" * 4
+        TypeTag.from_str(mixed)
+        with self.assertRaisesRegex(ValueError, "nesting"):
+            TypeTag.from_str("vector<" + mixed + ">")
+
+    def test_deep_input_raises_value_error_not_recursion_error(self):
+        depth = 100_000
+        with self.assertRaises(ValueError):
+            TypeTag.from_str("vector<" * depth + "u8" + ">" * depth)
+        with self.assertRaises(ValueError):
+            TypeTag.from_str("vector<" * depth)
+        with self.assertRaises(ValueError):
+            TypeTag.from_bytes(bytes([TypeTag.VECTOR]) * depth + bytes([TypeTag.U8]))
+
+    def test_nesting_limit_in_deserialisation(self):
+        limit = MAX_TYPE_TAG_NESTING - 1
+        ok = bytes([TypeTag.VECTOR]) * limit + bytes([TypeTag.U8])
+        self.assertEqual(TypeTag.from_bytes(ok).to_bytes(), ok)
+        with self.assertRaisesRegex(ValueError, "nesting"):
+            TypeTag.from_bytes(bytes([TypeTag.VECTOR]) + ok)
+        with self.assertRaisesRegex(ValueError, "nesting"):
+            VectorTag.from_bytes(bytes([TypeTag.VECTOR]) + ok)
+        struct_ok = TypeTag.from_str("0x1::a::B<" * limit + "u8" + ">" * limit)
+        self.assertEqual(TypeTag.from_bytes(struct_ok.to_bytes()), struct_ok)
+        too_deep = TypeTag(
+            StructTag(AccountAddress.from_str("0x1"), "a", "B", [struct_ok])
+        )
+        with self.assertRaisesRegex(ValueError, "nesting"):
+            TypeTag.from_bytes(too_deep.to_bytes())
+        with self.assertRaisesRegex(ValueError, "nesting"):
+            StructTag.from_bytes(too_deep.value.to_bytes())
+
+    def test_identifiers_follow_the_move_rule(self):
+        for text in ["0x1::_a::B", "0x1::a_::B_", "0x1::_1::_2", "0x1::A1_b::Z"]:
+            with self.subTest(text):
+                self.assertEqual(str(TypeTag.from_str(text)), text)
+        for text in [
+            "0x1::_::B",
+            "0x1::a::_",
+            "0x1::_::_",
+            "0x1::1::B",
+            "0x1::a::2",
+            "0x1::1a::B",
+        ]:
+            with self.subTest(text), self.assertRaises(ValueError):
+                TypeTag.from_str(text)
+
+    def test_long_input_with_trailing_whitespace_parses(self):
+        text = "vector<u8>" + " " * 50_000
+        self.assertEqual(TypeTag.from_str(text), TypeTag.from_str("vector<u8>"))
+        with self.assertRaises(ValueError):
+            TypeTag.from_str("vector<u8>" + " " * 50_000 + "$")
+
+    def test_trailing_comma_error_names_the_comma(self):
+        for text in ["0x1::a::B<u8,>", "0x1::a::B<u8, >", "0x1::a::B<u8,u16,>"]:
+            with (
+                self.subTest(text),
+                self.assertRaisesRegex(ValueError, "trailing comma"),
+            ):
+                TypeTag.from_str(text)
+
+    def test_misplaced_punctuation_errors_name_the_token(self):
+        for text, token in [
+            ("0x1::a::B<,u8>", "','"),
+            ("vector<>", "'>'"),
+            ("<u8>", "'<'"),
+            ("::", "'::'"),
+        ]:
+            with self.subTest(text):
+                with self.assertRaises(ValueError) as caught:
+                    TypeTag.from_str(text)
+                message = str(caught.exception)
+                self.assertIn(f"expected a type, found {token}", message)
+                self.assertNotIn("invalid address", message)
 
     def test_primitive_tag_alone_serialises_to_nothing(self):
         self.assertEqual(U64Tag().to_bytes(), b"")
