@@ -395,7 +395,7 @@ class SingleKeyAuthenticator:
             self.signature = asymmetric_crypto_wrapper.Signature(signature)
 
     def verify(self, data: bytes) -> bool:
-        return self.public_key.verify(data, self.signature.signature)
+        return self.public_key.verify(data, self.signature)
 
     @staticmethod
     def deserialize(deserializer: Deserializer) -> SingleKeyAuthenticator:
