@@ -75,4 +75,4 @@ jobs:
         run: uv export --frozen --no-hashes --no-dev --no-emit-project -o requirements-audit.txt
 
       - name: pip-audit
-        run: uvx pip-audit --no-deps -r requirements-audit.txt
+        run: uvx pip-audit@2.10.1 --no-deps -r requirements-audit.txt

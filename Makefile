@@ -34,7 +34,7 @@ build:
 
 audit:
 	uv export --frozen --no-hashes --no-dev --no-emit-project -o requirements-audit.txt
-	uvx pip-audit --no-deps -r requirements-audit.txt
+	uvx pip-audit@2.10.1 --no-deps -r requirements-audit.txt
 	rm -f requirements-audit.txt
 
 ci: lint fmt-check typecheck test-unit test-spec test-coverage build audit
