@@ -16,7 +16,11 @@ uses about 1,000 units (988 measured), which times the 1.5 margin is about 1,500
 1,562."""
 
 MAX_GAS_AMOUNT_PER_TRANSACTION = 2_000_000_000
-"""The node's maximum gas units per transaction (`txn.maximum_number_of_gas_units` of the on-chain gas schedule)."""
+"""The maximum gas units per transaction, `txn.maximum_number_of_gas_units` of the on-chain gas schedule. 2,000,000,000
+is the compiled default (`MAX_GAS_AMOUNT` in the node's `config/global-constants`) and the value on Mainnet, Testnet and
+Devnet. Governance can change it. The SDK does not read it: an estimate for a balance above this many units is
+simulated at this value, and a simulation that the network refuses for a lower maximum raises `MaxGasEstimationError`
+that says so."""
 
 FALLBACK_MAX_GAS_AMOUNT = 20_000
 """Max gas, in gas units, of a transaction whose sender is only an address: there is no key to build the simulated
@@ -105,6 +109,20 @@ def max_gas_from_simulation(simulation: dict[str, Any], affordable: int) -> int:
     output = simulation.get("output")
     move_output = output.get("Move") if isinstance(output, dict) else None
     vm_status = move_output.get("vm_status") if isinstance(move_output, dict) else None
+    if (
+        status != "Success"
+        and isinstance(vm_status, str)
+        and "MAX_GAS_UNITS_EXCEEDS_MAX_GAS_UNITS_BOUND" in vm_status
+    ):
+        raise MaxGasEstimationError(
+            f"The network's per-transaction gas maximum is below the {affordable} units that the balance pays for "
+            f"(status: {status}, vm_status: {vm_status}); governance has lowered it from "
+            f"{MAX_GAS_AMOUNT_PER_TRANSACTION}. Set max_gas_amount, at most that maximum "
+            "(`txn.maximum_number_of_gas_units` of the on-chain gas schedule)",
+            status,
+            vm_status,
+            simulation,
+        )
     if status != "Success":
         raise MaxGasEstimationError(
             f"Simulation of the transaction did not succeed (status: {status}, vm_status: {vm_status}); "

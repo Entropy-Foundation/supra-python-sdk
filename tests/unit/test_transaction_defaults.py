@@ -468,6 +468,35 @@ class TestMaxGas(unittest.IsolatedAsyncioTestCase):
         self.assertIn("set max_gas_amount", str(context.exception))
         self.assertEqual(node.count(*SIMULATE), 2)
 
+    async def test_rich_account_is_simulated_at_the_network_maximum(self):
+        node = FakeNode()
+        node.balance = 10**15
+        raw = await self.create(node)
+        simulated = decode_simulated(node.simulated[0])
+        self.assertEqual(simulated.transaction.max_gas_amount, 2_000_000_000)
+        self.assertEqual(raw.max_gas_amount, MIN_ESTIMATED_MAX_GAS_AMOUNT)
+
+    async def test_lowered_network_maximum_is_named_in_the_error(self):
+        node = FakeNode()
+        node.balance = 10**15
+        node.simulation = lambda: httpx.Response(
+            200,
+            json={
+                "status": "Invalid",
+                "output": {
+                    "Move": {
+                        "gas_used": 0,
+                        "vm_status": "Transaction Validation failed: "
+                        "ValidationFailed(..., MAX_GAS_UNITS_EXCEEDS_MAX_GAS_UNITS_BOUND)",
+                    }
+                },
+            },
+        )
+        with self.assertRaises(MaxGasEstimationError) as context:
+            await self.create(node)
+        self.assertIn("governance", str(context.exception))
+        self.assertIn("set max_gas_amount", str(context.exception).lower())
+
     async def test_fee_payer_balance_caps_a_raw_transaction_of_an_empty_sender(self):
         node = FakeNode()
         sender, fee_payer = Account.generate(), Account.generate()
