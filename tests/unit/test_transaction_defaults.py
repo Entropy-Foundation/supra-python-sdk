@@ -439,6 +439,24 @@ class TestMaxGas(unittest.IsolatedAsyncioTestCase):
         self.assertIn("set max_gas_amount", str(context.exception))
         self.assertEqual(node.count(*SIMULATE), 2)
 
+    async def test_example_style_transaction_for_an_address_serialises(self):
+        """The multisig example builds its transactions this way: an address sender and an explicit max gas."""
+        node = FakeNode()
+        node.balance = 0
+        client = make_client(node)
+        self.addAsyncCleanup(client.close)
+        raw = await client.create_raw_transaction(
+            AccountAddress.from_str("0x" + "ab" * 32),
+            transfer_payload(),
+            sequence_number=1,
+            max_gas_amount=20_000,
+        )
+        self.assertEqual(raw.max_gas_amount, 20_000)
+        self.assertEqual(node.count(*VIEW), 0)
+        serializer = Serializer()
+        raw.serialize(serializer)
+        self.assertGreater(len(serializer.output()), 0)
+
     async def test_signed_transaction_keeps_a_valid_signature(self):
         node = FakeNode()
         client = make_client(node)

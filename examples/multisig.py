@@ -4,7 +4,6 @@
 
 import asyncio
 import sys
-import time
 from typing import cast
 
 import aiofiles
@@ -19,7 +18,6 @@ from supra_sdk.clients.rest import SupraClient
 from supra_sdk.ed25519 import MultiPublicKey, MultiSignature
 from supra_sdk.transactions import (
     EntryFunction,
-    RawTransaction,
     Script,
     ScriptArgument,
     SignedTransaction,
@@ -29,6 +27,11 @@ from supra_sdk.transactions import (
 from supra_sdk.type_tag import StructTag, TypeTag
 
 should_wait = True
+
+# Max gas of the multisig transactions below. They are built with an explicit value, so the SDK makes no estimate: the
+# sender is a multisig account, which has no key to simulate with. It covers a multisig account creation (about
+# 1,700 units) and a package publish (about 2,000 units).
+MAX_GAS_AMOUNT = 20_000
 
 
 def wait():
@@ -104,17 +107,11 @@ async def main(should_wait_input: bool):
         ],
     )
 
-    chain_id = await supra_client.chain_id()
-    raw_transaction = RawTransaction(
-        sender=multisig_address,
+    raw_transaction = await supra_client.create_raw_transaction(
+        multisig_address,
+        TransactionPayload(entry_function),
         sequence_number=0,
-        payload=TransactionPayload(entry_function),
-        max_gas_amount=supra_client.transaction_config.max_gas_amount,
-        gas_unit_price=supra_client.transaction_config.gas_unit_price,
-        expiration_timestamps_secs=(
-            int(time.time()) + await supra_client.max_transaction_time_to_live() - 5
-        ),
-        chain_id=chain_id,
+        max_gas_amount=MAX_GAS_AMOUNT,
     )
 
     alice_signature = cast(ed25519.Signature, alice.sign(raw_transaction.keyed()))
@@ -256,16 +253,11 @@ async def main(should_wait_input: bool):
         ],
     )
 
-    raw_transaction = RawTransaction(
-        sender=deedee.address(),
+    raw_transaction = await supra_client.create_raw_transaction(
+        deedee.address(),
+        TransactionPayload(payload),
         sequence_number=1,
-        payload=TransactionPayload(payload),
-        max_gas_amount=supra_client.transaction_config.max_gas_amount,
-        gas_unit_price=supra_client.transaction_config.gas_unit_price,
-        expiration_timestamps_secs=(
-            int(time.time()) + await supra_client.max_transaction_time_to_live() - 5
-        ),
-        chain_id=chain_id,
+        max_gas_amount=MAX_GAS_AMOUNT,
     )
 
     alice_signature = cast(ed25519.Signature, alice.sign(raw_transaction.keyed()))
@@ -326,16 +318,11 @@ async def main(should_wait_input: bool):
         ],
     )
 
-    raw_transaction = RawTransaction(
-        sender=deedee.address(),
+    raw_transaction = await supra_client.create_raw_transaction(
+        deedee.address(),
+        TransactionPayload(entry_function_payload),
         sequence_number=2,
-        payload=TransactionPayload(entry_function_payload),
-        max_gas_amount=supra_client.transaction_config.max_gas_amount,
-        gas_unit_price=supra_client.transaction_config.gas_unit_price,
-        expiration_timestamps_secs=(
-            int(time.time()) + await supra_client.max_transaction_time_to_live() - 5
-        ),
-        chain_id=chain_id,
+        max_gas_amount=MAX_GAS_AMOUNT,
     )
 
     alice_signature = cast(ed25519.Signature, alice.sign(raw_transaction.keyed()))
@@ -374,16 +361,11 @@ async def main(should_wait_input: bool):
             ScriptArgument(ScriptArgument.ADDRESS, bob.address()),
         ],
     )
-    raw_transaction = RawTransaction(
-        sender=deedee.address(),
+    raw_transaction = await supra_client.create_raw_transaction(
+        deedee.address(),
+        TransactionPayload(script_payload),
         sequence_number=3,
-        payload=TransactionPayload(script_payload),
-        max_gas_amount=supra_client.transaction_config.max_gas_amount,
-        gas_unit_price=supra_client.transaction_config.gas_unit_price,
-        expiration_timestamps_secs=(
-            int(time.time()) + await supra_client.max_transaction_time_to_live() - 5
-        ),
-        chain_id=chain_id,
+        max_gas_amount=MAX_GAS_AMOUNT,
     )
 
     alice_signature = cast(ed25519.Signature, alice.sign(raw_transaction.keyed()))
