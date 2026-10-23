@@ -50,6 +50,7 @@ class FakeNode:
         self.sequence_number = 7
         self.balance = 10 * 100_000_000
         self.max_ttl = 600
+        self.parameters: Callable[[], httpx.Response] | None = None
         self.balances: dict[str, int] = {}
         self.view_arguments: list[list[str]] = []
         self.simulated: list[bytes] = []
@@ -70,6 +71,8 @@ class FakeNode:
                 200, json={"min_configured_gas_price": GAS_PRICE, "mean_price": 1}
             )
         if key == ("GET", f"{PREFIX}/transactions/parameters"):
+            if self.parameters is not None:
+                return self.parameters()
             return httpx.Response(
                 200, json={"max_transaction_time_to_live_seconds": self.max_ttl}
             )
@@ -195,6 +198,28 @@ class TestExpiration(unittest.IsolatedAsyncioTestCase):
         await build_at_fixed_time(other)
         self.assertEqual(other_node.count(*PARAMETERS), 1)
         await other.close()
+
+    async def test_missing_endpoint_falls_back_to_600_and_is_not_cached(self):
+        node = FakeNode()
+        node.parameters = lambda: httpx.Response(404, text="not found")
+        client = make_client(node)
+        self.assertEqual(await build_at_fixed_time(client), NOW + 595)
+        node.parameters = None
+        node.max_ttl = 120
+        self.assertEqual(await build_at_fixed_time(client), NOW + 115)
+        self.assertEqual(node.count(*PARAMETERS), 2)
+        await build_at_fixed_time(client)
+        self.assertEqual(node.count(*PARAMETERS), 2)
+        await client.close()
+
+    async def test_answer_without_the_key_falls_back_to_600_and_is_not_cached(self):
+        node = FakeNode()
+        node.parameters = lambda: httpx.Response(200, json={"other": 1})
+        client = make_client(node)
+        self.assertEqual(await build_at_fixed_time(client), NOW + 595)
+        self.assertEqual(await build_at_fixed_time(client), NOW + 595)
+        self.assertEqual(node.count(*PARAMETERS), 2)
+        await client.close()
 
     async def test_failed_parameters_read_raises_and_is_not_cached(self):
         node = FakeNode()

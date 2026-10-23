@@ -23,6 +23,9 @@ FALLBACK_MAX_GAS_AMOUNT = 20_000
 authenticator with, so the max gas is not estimated. It covers a one-module publish (about 2,000 units) and a transfer
 that creates the receiver (about 1,000). It is capped at what the sender's balance pays for."""
 
+DEFAULT_MAX_TRANSACTION_TTL_SECONDS = 600
+"""The node's maximum transaction time-to-live on every network, used when the node does not report it."""
+
 EXPIRATION_MARGIN_SECONDS = 5
 """Seconds subtracted from the node's maximum transaction time-to-live in the default expiration time. The node refuses
 a transaction that expires after its own clock plus the maximum TTL, so a node whose clock is up to this many seconds

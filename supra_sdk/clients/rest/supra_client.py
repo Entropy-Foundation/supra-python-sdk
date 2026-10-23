@@ -6,6 +6,7 @@ import copy
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from http import HTTPStatus
 from typing import Any
 
 from supra_sdk.account import Account
@@ -25,6 +26,7 @@ from supra_sdk.clients.rest.faucet import FaucetRestClient
 from supra_sdk.clients.rest.general import GeneralRestClient
 from supra_sdk.clients.rest.transaction import TransactionRestClient
 from supra_sdk.clients.rest.transaction_defaults import (
+    DEFAULT_MAX_TRANSACTION_TTL_SECONDS,
     FALLBACK_MAX_GAS_AMOUNT,
     MaxGasEstimationError,
     affordable_gas_amount,
@@ -46,6 +48,8 @@ from supra_sdk.transactions import (
 )
 from supra_sdk.type_tag import StructTag, TypeTag
 
+_MAX_TTL_KEY = "max_transaction_time_to_live_seconds"
+
 
 @dataclass
 class TransactionConfig:
@@ -60,7 +64,8 @@ class TransactionConfig:
             network, counted from the client's clock. An integer is used as given, even if it exceeds the node's
             maximum (the node then refuses the transaction). `None` (the default) expires the transaction
             `max_transaction_time_to_live_seconds - 5` seconds after the client's clock, where the maximum is read
-            once per client from `rpc/v3/transactions/parameters` (600 on every network). The node refuses a
+            once per client from `rpc/v3/transactions/parameters` (600 on every network; 600 is also used, without
+            caching, when the node answers 404 or omits the value). The node refuses a
             transaction that expires after its own clock plus the maximum, so the 5-second margin lets the node's
             clock be up to 5 seconds behind the client's.
         gas_unit_price (int): Price per unit of gas used to execute the transaction. Defaults to
@@ -237,7 +242,9 @@ class SupraClient(
         """Provides the node's maximum transaction time-to-live in seconds.
 
         The value (`max_transaction_time_to_live_seconds` of `rpc/v3/transactions/parameters`) is read from the node
-        once per client and cached. A failed read raises and is not cached.
+        once per client and cached. A node that has no such endpoint (404) or an answer without the key gets
+        `DEFAULT_MAX_TRANSACTION_TTL_SECONDS` (600, the maximum on every network); that fallback is not cached, so the
+        next call reads the node again. Any other failed read raises and is not cached.
 
         Returns:
             int: The largest number of seconds after the node's clock at which a transaction may expire.
@@ -245,8 +252,19 @@ class SupraClient(
         """
         async with self._transaction_parameters_lock:
             if self._transaction_parameters is None:
-                self._transaction_parameters = await self.transaction_parameters()
-        return int(self._transaction_parameters["max_transaction_time_to_live_seconds"])
+                try:
+                    parameters = await self.transaction_parameters()
+                except ApiError as error:
+                    if error.status_code != HTTPStatus.NOT_FOUND:
+                        raise
+                    return DEFAULT_MAX_TRANSACTION_TTL_SECONDS
+                if (
+                    not isinstance(parameters, dict)
+                    or parameters.get(_MAX_TTL_KEY) is None
+                ):
+                    return DEFAULT_MAX_TRANSACTION_TTL_SECONDS
+                self._transaction_parameters = parameters
+            return int(self._transaction_parameters[_MAX_TTL_KEY])
 
     async def account_supra_balance(self, account_address: AccountAddress) -> int:
         """Provides the Supra coin balance associated with the given account.
