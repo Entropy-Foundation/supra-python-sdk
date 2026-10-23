@@ -129,16 +129,28 @@ class MultiEd25519Authenticator:
     public_key: ed25519.MultiPublicKey
     signature: ed25519.MultiSignature
 
-    def __init__(self, public_key, signature):
+    def __init__(
+        self, public_key: ed25519.MultiPublicKey, signature: ed25519.MultiSignature
+    ):
         self.public_key = public_key
         self.signature = signature
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, MultiEd25519Authenticator):
+            return NotImplemented
+        return self.public_key == other.public_key and self.signature == other.signature
+
+    def __str__(self) -> str:
+        return f"PublicKey: {self.public_key}, Signature: {self.signature}"
+
     def verify(self, data: bytes) -> bool:
-        raise NotImplementedError
+        return self.public_key.verify(data, self.signature)
 
     @staticmethod
     def deserialize(deserializer: Deserializer) -> MultiEd25519Authenticator:
-        raise NotImplementedError
+        public_key = deserializer.struct(ed25519.MultiPublicKey)
+        signature = deserializer.struct(ed25519.MultiSignature)
+        return MultiEd25519Authenticator(public_key, signature)
 
     def serialize(self, serializer: Serializer):
         serializer.struct(self.public_key)
@@ -345,6 +357,8 @@ class AccountAuthenticator:
             authenticator = MultiEd25519Authenticator.deserialize(deserializer)
         elif variant == AccountAuthenticator.SINGLE_KEY:
             authenticator = SingleKeyAuthenticator.deserialize(deserializer)
+        elif variant == AccountAuthenticator.MULTI_KEY:
+            authenticator = MultiKeyAuthenticator.deserialize(deserializer)
         else:
             raise Exception(f"Invalid type: {variant}")
 
@@ -405,6 +419,14 @@ class MultiKeyAuthenticator:
     ):
         self.public_key = public_key
         self.signature = signature
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, MultiKeyAuthenticator):
+            return NotImplemented
+        return self.public_key == other.public_key and self.signature == other.signature
+
+    def __str__(self) -> str:
+        return f"PublicKey: {self.public_key}, Signature: {self.signature}"
 
     def verify(self, data: bytes) -> bool:
         return self.public_key.verify(data, self.signature)

@@ -23,6 +23,11 @@ class PublicKey(asymmetric_crypto.PublicKey):
             raise NotImplementedError()
         self.public_key = public_key
 
+    def __eq__(self, other: object):
+        if not isinstance(other, PublicKey):
+            return NotImplemented
+        return self.variant == other.variant and self.public_key == other.public_key
+
     def to_crypto_bytes(self) -> bytes:
         serializer = Serializer()
         self.serialize(serializer)
@@ -65,6 +70,11 @@ class Signature(asymmetric_crypto.Signature):
             raise NotImplementedError()
         self.signature = signature
 
+    def __eq__(self, other: object):
+        if not isinstance(other, Signature):
+            return NotImplemented
+        return self.variant == other.variant and self.signature == other.signature
+
     def get_null_signature(self) -> Signature:
         if self.variant == Signature.ED25519:
             return Signature(ed25519.Signature.get_null_signature())
@@ -98,12 +108,15 @@ class MultiPublicKey(asymmetric_crypto.PublicKey):
     MIN_THRESHOLD = 1
 
     def __init__(self, keys: list[asymmetric_crypto.PublicKey], threshold: int):
-        assert self.MIN_KEYS <= len(keys) <= self.MAX_KEYS, (
-            f"Must have between {self.MIN_KEYS} and {self.MAX_KEYS} keys."
-        )
-        assert self.MIN_THRESHOLD <= threshold <= len(keys), (
-            f"Threshold must be between {self.MIN_THRESHOLD} and {len(keys)}."
-        )
+        """Raises ValueError if the key count or the threshold is out of range."""
+        if not self.MIN_KEYS <= len(keys) <= self.MAX_KEYS:
+            raise ValueError(
+                f"Must have between {self.MIN_KEYS} and {self.MAX_KEYS} keys."
+            )
+        if not self.MIN_THRESHOLD <= threshold <= len(keys):
+            raise ValueError(
+                f"Threshold must be between {self.MIN_THRESHOLD} and {len(keys)}."
+            )
 
         # Ensure keys are wrapped
         self.keys = []
@@ -115,26 +128,26 @@ class MultiPublicKey(asymmetric_crypto.PublicKey):
 
         self.threshold = threshold
 
+    def __eq__(self, other: object):
+        if not isinstance(other, MultiPublicKey):
+            return NotImplemented
+        return self.keys == other.keys and self.threshold == other.threshold
+
     def __str__(self) -> str:
         return f"{self.threshold}-of-{len(self.keys)} Multi key"
 
     def verify(self, data: bytes, signature: asymmetric_crypto.Signature) -> bool:
-        try:
-            total_sig = cast(MultiSignature, signature)
-            assert self.threshold <= len(total_sig.signatures), (
-                f"Insufficient signatures, {self.threshold} > {len(total_sig.signatures)}"
-            )
-
-            for idx, signature in total_sig.signatures:
-                assert len(self.keys) > idx, (
-                    f"Signature index exceeds available keys {len(self.keys)} < {idx}"
-                )
-                assert self.keys[idx].verify(data, signature), (
-                    "Unable to verify signature"
-                )
-
-        except Exception:
+        """Returns True only if the signature set meets the threshold and every
+        signature verifies against the key at its index."""
+        if not isinstance(signature, MultiSignature):
             return False
+        if len(signature.signatures) < self.threshold:
+            return False
+        for idx, sig in signature.signatures:
+            if idx >= len(self.keys):
+                return False
+            if not self.keys[idx].verify(data, sig):
+                return False
         return True
 
     @staticmethod
@@ -162,14 +175,31 @@ class MultiSignature(asymmetric_crypto.Signature):
     signatures: list[tuple[int, Signature]]
     BITMAP_NUM_OF_BYTES: int = 4
 
-    def __init__(self, signatures: list[tuple[int, asymmetric_crypto.Signature]]):
-        # Sort first to ensure no issues in order
-        # signatures.sort(key=lambda x: x[0])
+    bitmap_num_of_bytes: int
+
+    # Largest bitmap the node accepts when decoding.
+    MAX_BITMAP_NUM_OF_BYTES: int = 8192
+
+    def __init__(
+        self,
+        signatures: list[tuple[int, asymmetric_crypto.Signature]],
+        bitmap_num_of_bytes: int = BITMAP_NUM_OF_BYTES,
+    ):
+        """Signatures are (key index, signature) pairs in any order; they are kept
+        sorted by key index, the order the node pairs them with bitmap bits.
+
+        Raises ValueError for an index outside the bitmap or a repeated index."""
+        if not 1 <= bitmap_num_of_bytes <= self.MAX_BITMAP_NUM_OF_BYTES:
+            raise ValueError("bitmap length is invalid")
+        self.bitmap_num_of_bytes = bitmap_num_of_bytes
+        indexes = [index for index, _ in signatures]
+        for index in indexes:
+            if not 0 <= index < bitmap_num_of_bytes * 8:
+                raise ValueError("bitmap value exceeds maximum value")
+        if len(set(indexes)) != len(indexes):
+            raise ValueError("duplicate signature index")
         self.signatures = []
-        for index, signature in signatures:
-            assert index < self.BITMAP_NUM_OF_BYTES * 8, (
-                "bitmap value exceeds maximum value"
-            )
+        for index, signature in sorted(signatures, key=lambda entry: entry[0]):
             if isinstance(signature, Signature):
                 self.signatures.append((index, signature))
             else:
@@ -185,32 +215,36 @@ class MultiSignature(asymmetric_crypto.Signature):
 
     @staticmethod
     def deserialize(deserializer: Deserializer) -> MultiSignature:
+        """Reads the signatures and the bitmap, which is a byte vector whose bits
+        are numbered from the most significant bit of its first byte.
+
+        The bitmap length is kept so that re-serialising reproduces the bytes.
+        Raises ValueError if the bitmap does not match the number of signatures."""
         signatures = deserializer.sequence(Signature.deserialize)
-        deserializer.uleb128()
-        bitmap = deserializer.u32()
-        num_bits = MultiSignature.BITMAP_NUM_OF_BYTES * 8
-        sig_index = 0
-        indexed_signatures = []
-
-        for i in range(num_bits):
-            has_signature = (bitmap & index_to_bitmap_value(i)) != 0
-            if has_signature:
-                indexed_signatures.append((i, signatures[sig_index]))
-                sig_index += 1
-
-        return MultiSignature(signatures)
+        bitmap = deserializer.to_bytes()
+        if not 1 <= len(bitmap) <= MultiSignature.MAX_BITMAP_NUM_OF_BYTES:
+            raise ValueError("bitmap length is invalid")
+        positions = [
+            position
+            for position in range(len(bitmap) * 8)
+            if bitmap[position // 8] & (128 >> (position % 8))
+        ]
+        if len(positions) != len(signatures):
+            raise ValueError("bitmap does not match the number of signatures")
+        return MultiSignature(
+            list(zip(positions, signatures, strict=True)), len(bitmap)
+        )
 
     def serialize(self, serializer: Serializer):
         actual_sigs = []
-        bitmap = 0
+        bitmap = bytearray(self.bitmap_num_of_bytes)
 
-        for i, signature in self.signatures:
-            bitmap |= index_to_bitmap_value(i)
+        for i, signature in sorted(self.signatures, key=lambda entry: entry[0]):
+            bitmap[i // 8] |= 128 >> (i % 8)
             actual_sigs.append(signature)
 
         serializer.sequence(actual_sigs, Serializer.struct)
-        serializer.uleb128(self.BITMAP_NUM_OF_BYTES)
-        serializer.u32(bitmap)
+        serializer.to_bytes(bytes(bitmap))
 
     def unset_signatures(self):
         for i, (pubkey_index, signature) in enumerate(self.signatures):
