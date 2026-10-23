@@ -1,6 +1,7 @@
 # Copyright © Supra
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import time
 import unittest
 from typing import Any, cast
@@ -23,10 +24,18 @@ from supra_sdk.transactions import (
 )
 from supra_sdk.type_tag import StructTag, TypeTag
 
+# These tests need a running node. Set SUPRA_RPC_URL (for example
+# "http://localhost:27001/") to run them; otherwise they are skipped.
+RPC_URL = os.environ.get("SUPRA_RPC_URL")
+requires_node = unittest.skipUnless(
+    RPC_URL, "set SUPRA_RPC_URL to run tests that need a node"
+)
 
+
+@requires_node
 class TestSupraClientEndpointsIntegration(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        base_url = "http://localhost:27001/"
+        base_url = cast(str, RPC_URL)
         self.test_account = Account.generate()
         self.supra_client = SupraClient(base_url)
 
@@ -363,9 +372,10 @@ class TestSupraClientEndpointsIntegration(unittest.IsolatedAsyncioTestCase):
         await self.supra_client.close()
 
 
+@requires_node
 class TestSupraAutomationTransactions(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        base_url = "http://localhost:27001/"
+        base_url = cast(str, RPC_URL)
         self.sender = Account.generate()
 
         self.supra_client = SupraClient(
@@ -455,9 +465,10 @@ class TestSupraAutomationTransactions(unittest.IsolatedAsyncioTestCase):
         await self.supra_client.close()
 
 
+@requires_node
 class TestFaucetClient(unittest.IsolatedAsyncioTestCase):
     async def test_faucet(self):
-        base_url = "http://localhost:27001/"
+        base_url = cast(str, RPC_URL)
         faucet_receiver_1 = Account.generate().address()
         faucet_receiver_2 = Account.generate().address()
         supra_client = SupraClient(base_url)

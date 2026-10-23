@@ -154,7 +154,7 @@ class MultiPublicKey(asymmetric_crypto.PublicKey):
         for key in self.keys:
             key_bytes.extend(key.to_crypto_bytes())
         key_bytes.append(self.threshold)
-        return key_bytes
+        return key_bytes  # type: ignore[return-value]  # returns a bytearray
 
     @staticmethod
     def deserialize(deserializer: Deserializer) -> MultiPublicKey:
@@ -266,7 +266,7 @@ class MultiSignature(asymmetric_crypto.Signature):
         signature_bytes.extend(
             bitmap.to_bytes(MultiSignature.BITMAP_NUM_OF_BYTES, "big")
         )
-        serializer.to_bytes(signature_bytes)
+        serializer.to_bytes(signature_bytes)  # type: ignore[arg-type]  # bytearray
 
     def unset_signatures(self):
         null_signature = Signature.get_null_signature()

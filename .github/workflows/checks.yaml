@@ -9,22 +9,70 @@ on:
     branches:
       - "**"
 
+permissions:
+  contents: read
+
 jobs:
-  lint:
-    name: Ruff Check
+  checks:
+    name: Checks (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Ruff check
+        run: uv run ruff check --no-fix supra_sdk tests/unit examples
+
+      - name: Ruff format check
+        run: uv run ruff format --check supra_sdk tests/unit examples
+
+      - name: Type check
+        run: uv run mypy
+
+      - name: Unit tests (offline) with coverage
+        run: uv run coverage run -m unittest discover -s tests/unit -p 'test_*.py' -t .
+
+      - name: Coverage report
+        run: uv run coverage report
+
+      - name: Behave specs
+        run: uv run behave --format progress tests/features
+
+      - name: Build
+        run: uv build
+
+  audit:
+    name: Dependency audit
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          python-version: "3.12"
+          persist-credentials: false
 
       - name: Install uv
-        run: pip install uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
 
-      - name: Run Ruff check
-        run: uv run ruff check supra_sdk tests/unit examples --no-fix
+      - name: Export the production lock
+        run: uv export --frozen --no-hashes --no-dev --no-emit-project -o requirements-audit.txt
+
+      - name: pip-audit
+        run: uvx pip-audit@2.10.1 --no-deps -r requirements-audit.txt
