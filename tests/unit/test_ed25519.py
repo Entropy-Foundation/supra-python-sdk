@@ -119,34 +119,26 @@ class Test(unittest.TestCase):
             PrivateKey.random().public_key() for x in range(MultiPublicKey.MAX_KEYS + 1)
         ]
         # Verify failure for initializing multisig instance with too few keys.
-        with self.assertRaisesRegex(AssertionError, "Must have between 2 and 32 keys."):
-            MultiPublicKey([keys[0]], 1)
+        with self.assertRaisesRegex(ValueError, "Must have between 1 and 32 keys."):
+            MultiPublicKey([], 1)
         # Verify failure for initializing multisig instance with too many keys.
-        with self.assertRaisesRegex(AssertionError, "Must have between 2 and 32 keys."):
+        with self.assertRaisesRegex(ValueError, "Must have between 1 and 32 keys."):
             MultiPublicKey(keys, 1)
         # Verify failure for initializing multisig instance with small threshold.
-        with self.assertRaisesRegex(
-            AssertionError, "Threshold must be between 1 and 4."
-        ):
+        with self.assertRaisesRegex(ValueError, "Threshold must be between 1 and 4."):
             MultiPublicKey(keys[0:4], 0)
         # Verify failure for initializing multisig instance with large threshold.
-        with self.assertRaisesRegex(
-            AssertionError, "Threshold must be between 1 and 4."
-        ):
+        with self.assertRaisesRegex(ValueError, "Threshold must be between 1 and 4."):
             MultiPublicKey(keys[0:4], 5)
         # Verify failure for initializing from bytes with too few keys.
-        with self.assertRaisesRegex(AssertionError, "Must have between 2 and 32 keys."):
-            MultiPublicKey.from_bytes(MultiPublicKey([keys[0]], 1).to_bytes())
+        with self.assertRaisesRegex(ValueError, "Must have between 1 and 32 keys."):
+            MultiPublicKey.from_crypto_bytes(bytes([1]))
         # Verify failure for initializing from bytes with too many keys.
-        with self.assertRaisesRegex(AssertionError, "Must have between 2 and 32 keys."):
+        with self.assertRaisesRegex(ValueError, "Must have between 1 and 32 keys."):
             MultiPublicKey.from_bytes(MultiPublicKey(keys, 1).to_bytes())
         # Verify failure for initializing from bytes with small threshold.
-        with self.assertRaisesRegex(
-            AssertionError, "Threshold must be between 1 and 4."
-        ):
+        with self.assertRaisesRegex(ValueError, "Threshold must be between 1 and 4."):
             MultiPublicKey.from_bytes(MultiPublicKey(keys[0:4], 0).to_bytes())
         # Verify failure for initializing from bytes with large threshold.
-        with self.assertRaisesRegex(
-            AssertionError, "Threshold must be between 1 and 4."
-        ):
+        with self.assertRaisesRegex(ValueError, "Threshold must be between 1 and 4."):
             MultiPublicKey.from_bytes(MultiPublicKey(keys[0:4], 5).to_bytes())
