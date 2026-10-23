@@ -3,8 +3,11 @@
 
 import asyncio
 import copy
+import json
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from http import HTTPStatus
 from typing import Any
 
 from supra_sdk.account import Account
@@ -16,6 +19,7 @@ from supra_sdk.authenticator import (
 )
 from supra_sdk.bcs import Serializer
 from supra_sdk.clients import ApiClient, ApiClientConfig
+from supra_sdk.clients.api_client import ApiError
 from supra_sdk.clients.rest.account import AccountRestClient
 from supra_sdk.clients.rest.block import BlockRestClient
 from supra_sdk.clients.rest.consensus import ConsensusRestClient
@@ -51,20 +55,22 @@ class TransactionConfig:
         gas_unit_price (int): Price per unit of gas used to execute the transaction. Defaults to
             `min_configured_gas_price` obtained from `rpc/v3/transactions/estimate_gas_price` endpoint.
         max_gas_amount (int): Maximum number of gas units allowed per transaction. Defaults to 500,000.
-        transaction_wait_time_in_seconds (int): Number of seconds to wait for a transaction to be executed before timing
-            out. Defaults to 20.
-        polling_wait_time_in_seconds (int): Delay, in seconds, between successive polling attempts when waiting for
-        transaction confirmation. Defaults to 1.
-        wait_for_transaction (bool): Whether to wait for the transaction to be confirmed after submission.
-            Defaults to True.
+        transaction_wait_time_in_seconds (float): Seconds to wait for a transaction to be final before timing out.
+            Defaults to 20.
+        polling_wait_time_in_seconds (float): Delay, in seconds, between successive polling attempts when waiting for
+            transaction confirmation. Defaults to 1.
+        wait_for_transaction (bool): Whether to wait for the transaction to be final after submission. When enabled,
+            `SupraClient.submit_transaction` and the helpers built on it raise `TransactionFailedError` unless the
+            transaction succeeded. When disabled they return the hash right after submission and do not check the
+            outcome. Defaults to True.
 
     """
 
     expiration_ttl: int = 600
     gas_unit_price: int | None = None
     max_gas_amount: int = 500_000
-    transaction_wait_time_in_seconds: int = 20
-    polling_wait_time_in_seconds: int = 1
+    transaction_wait_time_in_seconds: float = 20
+    polling_wait_time_in_seconds: float = 1
     wait_for_transaction: bool = True
 
 
@@ -210,55 +216,136 @@ class SupraClient(
         This method wraps the given `signed_transaction` under `SupraTransaction`, serializes wrapped object using
         BCS serialization, submits serialized payload on the rpc node endpoint, and returns the transaction hash.
 
+        If `TransactionConfig.wait_for_transaction` is enabled (the default), the method then waits for the
+        transaction to be final and raises `TransactionFailedError` unless its status is `Success`. If it is
+        disabled, the method returns the hash right after submission and the outcome of the transaction is not
+        checked. Use `submit_transaction_and_wait` to get the final transaction data.
+
         Args:
             signed_transaction (SignedTransaction): Signed transaction object to submit transaction.
 
         Returns:
             str: Transaction hash of the submitted transaction.
 
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final within
+                `TransactionConfig.transaction_wait_time_in_seconds`.
+
         """
+        if self.transaction_config.wait_for_transaction:
+            transaction_hash, _ = await self._submit_wait_and_check(signed_transaction)
+            return transaction_hash
+        return await self.submit(SupraTransaction(signed_transaction).to_bytes())
+
+    async def submit_transaction_and_wait(
+        self,
+        signed_transaction: SignedTransaction,
+    ) -> dict[str, Any]:
+        """Submits a signed transaction, waits until it is final and returns its data.
+
+        This method always waits, regardless of `TransactionConfig.wait_for_transaction`.
+
+        Args:
+            signed_transaction (SignedTransaction): Signed transaction object to submit transaction.
+
+        Returns:
+            dict[str, Any]: The transaction data, whose status is `Success`.
+
+        Raises:
+            TransactionFailedError: If the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If the transaction is not final within
+                `TransactionConfig.transaction_wait_time_in_seconds`.
+
+        """
+        _, transaction_data = await self._submit_wait_and_check(signed_transaction)
+        return transaction_data
+
+    async def _submit_wait_and_check(
+        self, signed_transaction: SignedTransaction
+    ) -> tuple[str, dict[str, Any]]:
         transaction_hash = await self.submit(
             SupraTransaction(signed_transaction).to_bytes()
         )
-        if self.transaction_config.wait_for_transaction:
-            await self.wait_for_transaction(transaction_hash)
-        return transaction_hash
+        transaction_data = await self.wait_for_transaction(transaction_hash)
+        _raise_if_not_successful(transaction_hash, transaction_data)
+        return transaction_hash, transaction_data
 
     async def wait_for_transaction(self, tx_hash: str) -> dict[str, Any]:
-        """Wait for a transaction till it's in a pending state and transaction wait timeout is not reached.
+        """Waits until a transaction is final and returns its data.
 
-        This method repeatedly checks the transaction status until it is no longer pending or until the configured
-        timeout is reached. Returns the transaction data regardless of success or failure status.
+        This method polls the transaction until its status is `Success`, `Fail` or `Invalid`. Any other status keeps
+        it polling: `Pending`, `PendingAfterExecution` (the node reports it for a transaction that was executed but
+        may still succeed later, e.g. because its sequence number is too new), a missing status or an unknown one.
+        A 404 whose body is the node's "transaction not found" message (a JSON object with a `message` starting
+        "Information not available for" or containing "Cannot find transaction") means "not seen yet" and polling
+        continues; any other 404, such as a wrong base URL or a missing route, is raised as `ApiError`. The final
+        data is returned whatever the status is, so the caller must check `status`.
+
+        The wait never starts a poll after `TransactionConfig.transaction_wait_time_in_seconds` has passed, bounds each
+        poll by the time remaining, and sleeps at most the time remaining between polls. The first poll always
+        happens.
 
         Args:
             tx_hash (str): The hash of the transaction to wait for.
 
         Returns:
-            dict[str, Any]: The final transaction data once the transaction is no longer pending.
+            dict[str, Any]: The final transaction data.
+
+        Raises:
+            TransactionWaitTimeoutReachedError: If the transaction is not final within
+                `TransactionConfig.transaction_wait_time_in_seconds`. The error carries the hash and the last status
+                seen (`None` if the node never knew the transaction).
 
         """
-        start_time = time.monotonic()
-        while (
-            int(time.monotonic() - start_time)
-            <= self.transaction_config.transaction_wait_time_in_seconds
-        ):
-            await asyncio.sleep(self.transaction_config.polling_wait_time_in_seconds)
-            transaction_data = await self.transaction_by_hash(tx_hash)
-            if transaction_data.get("status") != "Pending":
-                return transaction_data
+        return await self._wait_until_final(tx_hash, self.transaction_by_hash)
 
-        raise TransactionWaitTimeoutReachedError(
-            tx_hash, self.transaction_config.transaction_wait_time_in_seconds
-        )
+    async def _wait_until_final(
+        self,
+        tx_hash: str,
+        fetch: Callable[[str], Awaitable[dict[str, Any]]],
+    ) -> dict[str, Any]:
+        timeout = self.transaction_config.transaction_wait_time_in_seconds
+        deadline = time.monotonic() + timeout
+        last_status: str | None = None
+        first_poll = True
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 and not first_poll:
+                raise TransactionWaitTimeoutReachedError(tx_hash, timeout, last_status)
+            try:
+                transaction_data = await asyncio.wait_for(
+                    fetch(tx_hash), timeout=remaining if remaining > 0 else None
+                )
+            except TimeoutError:
+                # The poll itself outlasted the deadline.
+                raise TransactionWaitTimeoutReachedError(
+                    tx_hash, timeout, last_status
+                ) from None
+            except ApiError as error:
+                if not _is_transaction_not_found(error):
+                    raise
+            else:
+                status = transaction_data.get("status")
+                if isinstance(status, str):
+                    last_status = status
+                if status in _FINAL_STATUSES:
+                    return transaction_data
+            first_poll = False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TransactionWaitTimeoutReachedError(tx_hash, timeout, last_status)
+            await asyncio.sleep(
+                min(self.transaction_config.polling_wait_time_in_seconds, remaining)
+            )
 
     async def simulate_transaction(
         self, signed_transaction: SignedTransaction
     ) -> dict[str, Any]:
         """Simulates a given signed transaction.
 
-        This method internally replaces valid signatures with null/invalid signatures in the signed transaction payload,
-        once simulation is completed, valid signatures are replaced with invalid signatures, hence, there is no need to
-        provide a payload with invalid signatures.
+        The simulation is sent with the signatures removed, so there is no need to provide a transaction with invalid
+        signatures. The given `signed_transaction` is never modified, whether the simulation succeeds or fails.
 
         Args:
             signed_transaction (SignedTransaction): Signed transaction object for simulation simulate.
@@ -267,16 +354,12 @@ class SupraClient(
             dict[str, Any]: Transaction simulation result.
 
         """
-        authenticator_with_valid_signature = signed_transaction.authenticator
         authenticator_clone = copy.deepcopy(signed_transaction.authenticator)
         authenticator_clone.unset_signature()
-        signed_transaction.authenticator = authenticator_clone
-
-        simulation_result = await self.simulate(
-            SupraTransaction(signed_transaction).to_bytes()
+        unsigned_copy = SignedTransaction(
+            signed_transaction.transaction, authenticator_clone
         )
-        signed_transaction.authenticator = authenticator_with_valid_signature
-        return simulation_result
+        return await self.simulate(SupraTransaction(unsigned_copy).to_bytes())
 
     async def create_raw_transaction(
         self,
@@ -448,6 +531,10 @@ class SupraClient(
         Returns:
             str: Transaction hash.
 
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
+
         """
         automation_params_v1 = AutomationRegistrationParamsV1(
             automated_function,
@@ -480,6 +567,10 @@ class SupraClient(
         Returns:
             str: Transaction hash.
 
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
+
         """
         transaction_arguments = [
             TransactionArgument(task_index, Serializer.u64),
@@ -509,6 +600,10 @@ class SupraClient(
 
         Returns:
             str: Transaction hash.
+
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
 
         """
         transaction_arguments = [
@@ -550,6 +645,10 @@ class SupraClient(
         Returns:
             str: Transaction hash.
 
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
+
         """
         return await self.transfer_coins(
             sender, recipient, "0x1::supra_coin::SupraCoin", amount, sequence_number
@@ -578,6 +677,10 @@ class SupraClient(
 
         Returns:
             str: Transaction hash.
+
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
 
         """
         transaction_arguments = [
@@ -610,6 +713,10 @@ class SupraClient(
         Returns:
             str: Transaction hash.
 
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
+
         """
         transaction_arguments = [
             TransactionArgument(object_address, Serializer.struct),
@@ -639,6 +746,10 @@ class SupraClient(
 
         Returns:
             str: Transaction hash.
+
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
 
         """
         transaction_arguments = [
@@ -670,64 +781,149 @@ class SupraClient(
         Returns:
             str | None: Faucet transaction hash if faucet request is accepted else None.
 
+        Raises:
+            FaucetRequestNotAcceptedError: If waiting is requested and the faucet did not accept the request.
+            TransactionFailedError: If waiting is requested and the final status of the faucet transaction is not
+                `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is requested and the faucet transaction is not final within
+                `TransactionConfig.transaction_wait_time_in_seconds`.
+
         """
         may_be_tx_hash = await super().faucet(address)
         if wait_for_faucet:
             if not may_be_tx_hash:
                 raise FaucetRequestNotAcceptedError
-            await self.wait_for_faucet(may_be_tx_hash)
+            _raise_if_not_successful(
+                may_be_tx_hash, await self.wait_for_faucet(may_be_tx_hash)
+            )
         return may_be_tx_hash
 
     async def wait_for_faucet(self, faucet_tx_hash: str) -> dict[str, Any]:
-        """Wait for a faucet transaction till it's in a pending state and transaction wait timeout is not reached.
+        """Waits until a faucet transaction is final and returns its data.
 
         Note: This method is similar to the `SupraClient.wait_for_transaction`, this method uses
         `FaucetClient.faucet_transaction_by_hash` method to get transaction data of the faucet transaction, it uses that
         method because, there is different endpoint meant in rpc node to get the transaction details of the pending
-        faucet transactions.
+        faucet transactions. It polls under the same rules as `wait_for_transaction`: it keeps polling until the status
+        is `Success`, `Fail` or `Invalid`, treats only the node's "transaction not found" 404 as "not seen yet", and
+        returns the final data whatever the status is.
 
         Args:
             faucet_tx_hash (str): The hash of the faucet transaction to wait for.
 
         Returns:
-            dict[str, Any]: The final transaction data once the faucet transaction is no longer pending.
+            dict[str, Any]: The final transaction data.
+
+        Raises:
+            TransactionWaitTimeoutReachedError: If the transaction is not final within
+                `TransactionConfig.transaction_wait_time_in_seconds`.
 
         """
-        start_time = time.monotonic()
-        while (
-            int(time.monotonic() - start_time)
-            <= self.transaction_config.transaction_wait_time_in_seconds
-        ):
-            await asyncio.sleep(self.transaction_config.polling_wait_time_in_seconds)
-            transaction_data = await self.faucet_transaction_by_hash(faucet_tx_hash)
-            if transaction_data.get("status") != "Pending":
-                return transaction_data
-
-        raise TransactionWaitTimeoutReachedError(
-            faucet_tx_hash,
-            self.transaction_config.transaction_wait_time_in_seconds,
+        return await self._wait_until_final(
+            faucet_tx_hash, self.faucet_transaction_by_hash
         )
 
 
+# The only statuses after which the node will not change the outcome of a transaction.
+_FINAL_STATUSES = frozenset({"Success", "Fail", "Invalid"})
+
+# Fragments of the body the node's rpc transaction-by-hash endpoints return with a 404 when they do not know the hash.
+_TRANSACTION_NOT_FOUND_MESSAGES = (
+    "Information not available for",
+    "Cannot find transaction",
+)
+
+
+def _is_transaction_not_found(error: ApiError) -> bool:
+    """Whether the error is the node saying it does not know the transaction, rather than any other 404."""
+    if error.status_code != HTTPStatus.NOT_FOUND:
+        return False
+    try:
+        message = json.loads(error.message).get("message")
+    except (ValueError, AttributeError):
+        return False
+    return isinstance(message, str) and any(
+        fragment in message for fragment in _TRANSACTION_NOT_FOUND_MESSAGES
+    )
+
+
+def _raise_if_not_successful(tx_hash: str, transaction_data: dict[str, Any]) -> None:
+    status = transaction_data.get("status")
+    if status == "Success":
+        return
+    vm_status = None
+    output = transaction_data.get("output")
+    if isinstance(output, dict) and isinstance(output.get("Move"), dict):
+        vm_status = output["Move"].get("vm_status")
+    raise TransactionFailedError(tx_hash, status, vm_status, transaction_data)
+
+
 class TransactionWaitTimeoutReachedError(Exception):
-    """Exception raised when the transaction is in 'Pending' state even after max transaction wait time.
+    """Exception raised when the transaction is not final even after max transaction wait time.
 
     Attributes:
         tx_hash (str): Transaction hash.
+        last_status (str | None): Last status the node reported for the transaction, `None` if the node never knew the
+            transaction.
 
     """
 
-    def __init__(self, tx_hash: str, transaction_wait_time_in_seconds: int):
-        """Initializes the exception with transaction hash and wait time.
+    def __init__(
+        self,
+        tx_hash: str,
+        transaction_wait_time_in_seconds: float,
+        last_status: str | None = None,
+    ):
+        """Initializes the exception with transaction hash, wait time and the last status seen.
 
         Args:
             tx_hash (str): Transaction hash
-            transaction_wait_time_in_seconds (int): Transaction wait time.
+            transaction_wait_time_in_seconds (float): Transaction wait time.
+            last_status (str | None): Last status the node reported for the transaction. Default to None.
 
         """
         self.tx_hash = tx_hash
+        self.last_status = last_status
         super().__init__(
-            f"{tx_hash} transaction didn't processed within {transaction_wait_time_in_seconds} seconds"
+            f"{tx_hash} transaction was not final within {transaction_wait_time_in_seconds} seconds "
+            f"(last status: {last_status})"
+        )
+
+
+class TransactionFailedError(Exception):
+    """Exception raised when a submitted transaction reached a final status other than `Success`.
+
+    Attributes:
+        tx_hash (str): Transaction hash.
+        status (str | None): Final status of the transaction, e.g. `Fail` or `Invalid`.
+        vm_status (str | None): Message of the Move VM, e.g. the abort location and code. `None` if the node reported
+            no Move output, as for a transaction that failed validation.
+        transaction_data (dict[str, Any]): The transaction data as returned by the node.
+
+    """
+
+    def __init__(
+        self,
+        tx_hash: str,
+        status: str | None,
+        vm_status: str | None,
+        transaction_data: dict[str, Any] | None = None,
+    ):
+        """Initializes the exception with the transaction hash, status and VM status.
+
+        Args:
+            tx_hash (str): Transaction hash.
+            status (str | None): Final status of the transaction.
+            vm_status (str | None): Message of the Move VM, if any.
+            transaction_data (dict[str, Any] | None): The transaction data as returned by the node. Default to None.
+
+        """
+        self.tx_hash = tx_hash
+        self.status = status
+        self.vm_status = vm_status
+        self.transaction_data = transaction_data or {}
+        super().__init__(
+            f"{tx_hash} transaction failed with status {status} (vm_status: {vm_status})"
         )
 
 

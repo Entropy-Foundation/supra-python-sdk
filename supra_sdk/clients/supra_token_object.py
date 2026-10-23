@@ -434,6 +434,16 @@ class SupraTokenObjectClient:
         royalty_numerator: int,
         royalty_denominator: int,
     ) -> str:
+        """Creates a new collection.
+
+        Returns:
+            str: Transaction hash.
+
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
+
+        """
         payload = SupraTokenObjectClient.create_collection_payload(
             description,
             max_supply,
@@ -499,6 +509,16 @@ class SupraTokenObjectClient:
         uri: str,
         properties: PropertyMap,
     ) -> str:  # <:!:mint_token
+        """Mints a token in a collection.
+
+        Returns:
+            str: Transaction hash.
+
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
+
+        """
         payload = SupraTokenObjectClient.mint_token_payload(
             collection, description, name, uri, properties
         )
@@ -517,6 +537,16 @@ class SupraTokenObjectClient:
         properties: PropertyMap,
         soul_bound_to: AccountAddress,
     ):
+        """Mints a token that is bound to the given account.
+
+        Returns:
+            str: Transaction hash.
+
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
+
+        """
         (property_names, property_types, property_values) = properties.to_tuple()
         transaction_arguments = [
             TransactionArgument(collection, Serializer.str),
@@ -550,9 +580,29 @@ class SupraTokenObjectClient:
     async def transfer_token(
         self, owner: Account, token: AccountAddress, to: AccountAddress
     ) -> str:
+        """Transfers a token to another account.
+
+        Returns:
+            str: Transaction hash.
+
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
+
+        """
         return await self.client.transfer_object(owner, token, to)
 
     async def burn_token(self, creator: Account, token: AccountAddress) -> str:
+        """Burns a token.
+
+        Returns:
+            str: Transaction hash.
+
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
+
+        """
         payload = EntryFunction.natural(
             "0x4::aptos_token",
             "burn",
@@ -566,6 +616,16 @@ class SupraTokenObjectClient:
         return await self.client.submit_transaction(signed_transaction)
 
     async def freeze_token(self, creator: Account, token: AccountAddress) -> str:
+        """Freezes the transfer of a token.
+
+        Returns:
+            str: Transaction hash.
+
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
+
+        """
         payload = EntryFunction.natural(
             "0x4::aptos_token",
             "freeze_transfer",
@@ -579,6 +639,16 @@ class SupraTokenObjectClient:
         return await self.client.submit_transaction(signed_transaction)
 
     async def unfreeze_token(self, creator: Account, token: AccountAddress) -> str:
+        """Unfreezes the transfer of a token.
+
+        Returns:
+            str: Transaction hash.
+
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
+
+        """
         payload = EntryFunction.natural(
             "0x4::aptos_token",
             "unfreeze_transfer",
@@ -594,6 +664,16 @@ class SupraTokenObjectClient:
     async def add_token_property(
         self, creator: Account, token: AccountAddress, prop: Property
     ) -> str:
+        """Adds a property to a token.
+
+        Returns:
+            str: Transaction hash.
+
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
+
+        """
         transaction_arguments = [TransactionArgument(token, Serializer.struct)]
         transaction_arguments.extend(prop.to_transaction_arguments())
 
@@ -612,6 +692,16 @@ class SupraTokenObjectClient:
     async def remove_token_property(
         self, creator: Account, token: AccountAddress, name: str
     ) -> str:
+        """Removes a property from a token.
+
+        Returns:
+            str: Transaction hash.
+
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
+
+        """
         transaction_arguments = [
             TransactionArgument(token, Serializer.struct),
             TransactionArgument(name, Serializer.str),
@@ -632,6 +722,16 @@ class SupraTokenObjectClient:
     async def update_token_property(
         self, creator: Account, token: AccountAddress, prop: Property
     ) -> str:
+        """Updates a property of a token.
+
+        Returns:
+            str: Transaction hash.
+
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
+
+        """
         transaction_arguments = [TransactionArgument(token, Serializer.struct)]
         transaction_arguments.extend(prop.to_transaction_arguments())
 

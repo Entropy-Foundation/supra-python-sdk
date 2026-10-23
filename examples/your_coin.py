@@ -125,10 +125,9 @@ async def main():
     except ApiError:
         maybe_balance = None
     print(f"Bob will transfer to Alice, her balance: {maybe_balance}")
-    txn_hash = await supra_client.transfer_coins(
+    await supra_client.transfer_coins(
         bob, alice.address(), f"{alice.address()}::moon_coin::MoonCoin", 5
     )
-    await supra_client.wait_for_transaction(txn_hash)
     balance = await supra_client.get_balance(alice.address(), alice.address())
     print(f"Alice's updated MoonCoin balance: {balance}")
     balance = await supra_client.get_balance(alice.address(), bob.address())
