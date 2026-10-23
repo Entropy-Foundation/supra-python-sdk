@@ -38,7 +38,16 @@ class SupraTokenClient:
     async def create_collection(
         self, account: Account, name: str, description: str, uri: str
     ) -> str:
-        """Creates a new collection within the specified account"""
+        """Creates a new collection within the specified account.
+
+        Returns:
+            str: Transaction hash.
+
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
+
+        """
         transaction_arguments = [
             TransactionArgument(name, Serializer.str),
             TransactionArgument(description, Serializer.str),
@@ -71,6 +80,16 @@ class SupraTokenClient:
         uri: str,
         royalty_points_per_million: int,
     ) -> str:
+        """Creates a new token in a collection.
+
+        Returns:
+            str: Transaction hash.
+
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
+
+        """
         transaction_arguments = [
             TransactionArgument(collection_name, Serializer.str),
             TransactionArgument(name, Serializer.str),
@@ -114,6 +133,16 @@ class SupraTokenClient:
         property_version: int,
         amount: int,
     ) -> str:
+        """Offers a token to a receiver.
+
+        Returns:
+            str: Transaction hash.
+
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
+
+        """
         transaction_arguments = [
             TransactionArgument(receiver, Serializer.struct),
             TransactionArgument(creator, Serializer.struct),
@@ -143,6 +172,16 @@ class SupraTokenClient:
         token_name: str,
         property_version: int,
     ) -> str:
+        """Claims a token that was offered to the account.
+
+        Returns:
+            str: Transaction hash.
+
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
+
+        """
         transaction_arguments = [
             TransactionArgument(sender, Serializer.struct),
             TransactionArgument(creator, Serializer.struct),
@@ -172,6 +211,16 @@ class SupraTokenClient:
         property_version: int,
         amount: int,
     ) -> str:
+        """Transfers a token directly from the sender to the receiver, both signing.
+
+        Returns:
+            str: Transaction hash.
+
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
+
+        """
         transaction_arguments = [
             TransactionArgument(creators_address, Serializer.struct),
             TransactionArgument(collection_name, Serializer.str),

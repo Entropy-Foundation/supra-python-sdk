@@ -46,6 +46,7 @@ async def main():
         [],
     )
 
+    # The registration already succeeded (the helper raised otherwise); fetch its events to read the task index.
     task_registration_tx_data = await supra_client.transaction_by_hash(
         task_registration_tx_hash
     )
