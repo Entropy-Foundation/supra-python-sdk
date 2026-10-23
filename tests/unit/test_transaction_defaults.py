@@ -3,17 +3,21 @@
 
 """Offline tests of the defaults of a transaction: sequence number, max gas and expiration time."""
 
-import json
+import asyncio
+import time
 import unittest
 from collections.abc import Callable
 from typing import Any
+from unittest import mock
 
 import httpx
 
 from supra_sdk.account import Account
 from supra_sdk.account_address import AccountAddress
 from supra_sdk.bcs import Serializer
+from supra_sdk.clients.api_client import ApiError
 from supra_sdk.clients.rest import SupraClient, SupraClientConfig
+from supra_sdk.clients.rest.transaction_defaults import EXPIRATION_MARGIN_SECONDS
 from supra_sdk.transactions import (
     EntryFunction,
     TransactionArgument,
@@ -117,6 +121,80 @@ class TestSequenceNumber(unittest.IsolatedAsyncioTestCase):
             Account.generate(), transfer_payload()
         )
         self.assertEqual(raw.sequence_number, 7)
+        await client.close()
+
+
+NOW = 1_700_000_000
+PARAMETERS = ("GET", f"{PREFIX}/transactions/parameters")
+
+
+async def build_at_fixed_time(client: SupraClient) -> int:
+    with mock.patch.object(time, "time", return_value=NOW + 0.9):
+        raw = await client.create_raw_transaction(
+            Account.generate(), transfer_payload(), sequence_number=0
+        )
+    return raw.expiration_timestamps_secs
+
+
+class TestExpiration(unittest.IsolatedAsyncioTestCase):
+    async def test_default_expires_below_the_node_maximum_minus_the_margin(self):
+        node = FakeNode()
+        client = make_client(node)
+        expiration = await build_at_fixed_time(client)
+        self.assertLessEqual(expiration, NOW + 600 - EXPIRATION_MARGIN_SECONDS)
+        self.assertEqual(expiration, NOW + 595)
+        await client.close()
+
+    async def test_default_follows_the_nodes_maximum(self):
+        node = FakeNode()
+        node.max_ttl = 120
+        client = make_client(node)
+        self.assertEqual(await build_at_fixed_time(client), NOW + 115)
+        await client.close()
+
+    async def test_explicit_ttl_is_kept_and_reads_no_parameters(self):
+        node = FakeNode()
+        client = make_client(node, SupraClientConfig(expiration_ttl=900))
+        self.assertEqual(await build_at_fixed_time(client), NOW + 900)
+        self.assertEqual(node.count(*PARAMETERS), 0)
+        await client.close()
+
+    async def test_parameters_are_read_once_per_client(self):
+        node = FakeNode()
+        client = make_client(node)
+        await build_at_fixed_time(client)
+        await build_at_fixed_time(client)
+        await asyncio.gather(
+            client.max_transaction_time_to_live(),
+            client.max_transaction_time_to_live(),
+        )
+        self.assertEqual(node.count(*PARAMETERS), 1)
+        await client.close()
+        other_node = FakeNode()
+        other = make_client(other_node)
+        await build_at_fixed_time(other)
+        self.assertEqual(other_node.count(*PARAMETERS), 1)
+        await other.close()
+
+    async def test_failed_parameters_read_raises_and_is_not_cached(self):
+        node = FakeNode()
+        client = make_client(node)
+        original = node.handler
+
+        def failing(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/transactions/parameters"):
+                return httpx.Response(500, text="down")
+            return original(request)
+
+        client.api_client._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(failing)
+        )
+        with self.assertRaises(ApiError):
+            await client.max_transaction_time_to_live()
+        client.api_client._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(original)
+        )
+        self.assertEqual(await client.max_transaction_time_to_live(), 600)
         await client.close()
 
 

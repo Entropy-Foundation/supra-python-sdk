@@ -112,7 +112,7 @@ async def main(should_wait_input: bool):
         max_gas_amount=supra_client.transaction_config.max_gas_amount,
         gas_unit_price=supra_client.transaction_config.gas_unit_price,
         expiration_timestamps_secs=(
-            int(time.time()) + supra_client.transaction_config.expiration_ttl
+            int(time.time()) + await supra_client.max_transaction_time_to_live() - 5
         ),
         chain_id=chain_id,
     )
@@ -263,7 +263,7 @@ async def main(should_wait_input: bool):
         max_gas_amount=supra_client.transaction_config.max_gas_amount,
         gas_unit_price=supra_client.transaction_config.gas_unit_price,
         expiration_timestamps_secs=(
-            int(time.time()) + supra_client.transaction_config.expiration_ttl
+            int(time.time()) + await supra_client.max_transaction_time_to_live() - 5
         ),
         chain_id=chain_id,
     )
@@ -333,7 +333,7 @@ async def main(should_wait_input: bool):
         max_gas_amount=supra_client.transaction_config.max_gas_amount,
         gas_unit_price=supra_client.transaction_config.gas_unit_price,
         expiration_timestamps_secs=(
-            int(time.time()) + supra_client.transaction_config.expiration_ttl
+            int(time.time()) + await supra_client.max_transaction_time_to_live() - 5
         ),
         chain_id=chain_id,
     )
@@ -381,7 +381,7 @@ async def main(should_wait_input: bool):
         max_gas_amount=supra_client.transaction_config.max_gas_amount,
         gas_unit_price=supra_client.transaction_config.gas_unit_price,
         expiration_timestamps_secs=(
-            int(time.time()) + supra_client.transaction_config.expiration_ttl
+            int(time.time()) + await supra_client.max_transaction_time_to_live() - 5
         ),
         chain_id=chain_id,
     )

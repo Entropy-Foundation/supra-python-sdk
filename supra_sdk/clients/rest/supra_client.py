@@ -22,6 +22,7 @@ from supra_sdk.clients.rest.consensus import ConsensusRestClient
 from supra_sdk.clients.rest.faucet import FaucetRestClient
 from supra_sdk.clients.rest.general import GeneralRestClient
 from supra_sdk.clients.rest.transaction import TransactionRestClient
+from supra_sdk.clients.rest.transaction_defaults import default_expiration_timestamp
 from supra_sdk.transactions import (
     AutomationRegistrationParams,
     AutomationRegistrationParamsV1,
@@ -46,8 +47,13 @@ class TransactionConfig:
     submission.
 
     Attributes:
-        expiration_ttl (int): Time-to-live, in seconds, before a transaction expires and is rejected by the network.
-            Defaults to 600.
+        expiration_ttl (int | None): Time-to-live, in seconds, before a transaction expires and is rejected by the
+            network, counted from the client's clock. An integer is used as given, even if it exceeds the node's
+            maximum (the node then refuses the transaction). `None` (the default) expires the transaction
+            `max_transaction_time_to_live_seconds - 5` seconds after the client's clock, where the maximum is read
+            once per client from `rpc/v3/transactions/parameters` (600 on every network). The node refuses a
+            transaction that expires after its own clock plus the maximum, so the 5-second margin lets the node's
+            clock be up to 5 seconds behind the client's.
         gas_unit_price (int): Price per unit of gas used to execute the transaction. Defaults to
             `min_configured_gas_price` obtained from `rpc/v3/transactions/estimate_gas_price` endpoint.
         max_gas_amount (int): Maximum number of gas units allowed per transaction. Defaults to 500,000.
@@ -60,7 +66,7 @@ class TransactionConfig:
 
     """
 
-    expiration_ttl: int = 600
+    expiration_ttl: int | None = None
     gas_unit_price: int | None = None
     max_gas_amount: int = 500_000
     transaction_wait_time_in_seconds: int = 20
@@ -105,6 +111,7 @@ class SupraClient(
     """
 
     _chain_id: int | None
+    _transaction_parameters: dict[str, Any] | None
     transaction_config: TransactionConfig
 
     def __init__(
@@ -118,6 +125,8 @@ class SupraClient(
 
         """
         self._chain_id = None
+        self._transaction_parameters = None
+        self._transaction_parameters_lock = asyncio.Lock()
         supra_client_config = supra_client_config or SupraClientConfig()
 
         transaction_config = TransactionConfig(
@@ -150,6 +159,21 @@ class SupraClient(
         if not self._chain_id:
             self._chain_id = await self.network_chain_id()
         return self._chain_id
+
+    async def max_transaction_time_to_live(self) -> int:
+        """Provides the node's maximum transaction time-to-live in seconds.
+
+        The value (`max_transaction_time_to_live_seconds` of `rpc/v3/transactions/parameters`) is read from the node
+        once per client and cached. A failed read raises and is not cached.
+
+        Returns:
+            int: The largest number of seconds after the node's clock at which a transaction may expire.
+
+        """
+        async with self._transaction_parameters_lock:
+            if self._transaction_parameters is None:
+                self._transaction_parameters = await self.transaction_parameters()
+        return int(self._transaction_parameters["max_transaction_time_to_live_seconds"])
 
     async def account_supra_balance(self, account_address: AccountAddress) -> int:
         """Provides the Supra coin balance associated with the given account.
@@ -288,6 +312,10 @@ class SupraClient(
 
         This method builds a raw transaction with the provided sender, payload, and optionally a custom sequence number.
 
+        The transaction expires `TransactionConfig.expiration_ttl` seconds after the client's clock. Without an
+        `expiration_ttl` it expires 5 seconds before the node's maximum time-to-live (`rpc/v3/transactions/parameters`,
+        read once per client), so that a node whose clock is up to 5 seconds behind the client's accepts it.
+
         Args:
             sender (Account | AccountAddress): The account object or its address.
             transaction_payload (TransactionPayload): The transaction payload.
@@ -308,8 +336,16 @@ class SupraClient(
             self.transaction_config.max_gas_amount,
             self.transaction_config.gas_unit_price
             or (await self.estimate_gas_price())["min_configured_gas_price"],
-            int(time.time()) + self.transaction_config.expiration_ttl,
+            await self._expiration_timestamp(),
             await self.chain_id(),
+        )
+
+    async def _expiration_timestamp(self) -> int:
+        ttl = self.transaction_config.expiration_ttl
+        if ttl is not None:
+            return int(time.time()) + ttl
+        return default_expiration_timestamp(
+            int(time.time()), await self.max_transaction_time_to_live()
         )
 
     async def create_signed_transaction(
