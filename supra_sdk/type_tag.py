@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import re
 import typing
 
 from supra_sdk.account_address import AccountAddress
@@ -11,7 +12,15 @@ from supra_sdk.bcs import Deserializable, Deserializer, Serializable, Serializer
 
 
 class TypeTag(Deserializable, Serializable):
-    """TypeTag represents a primitive in Move."""
+    """A Move type, as used for the type arguments of a transaction payload.
+
+    The BCS encoding is the variant index followed by the variant's payload. Primitive
+    types and ``signer`` have no payload, so ``u64`` encodes as the single byte ``02``.
+    ``vector`` carries its element type and a struct carries a ``StructTag``.
+
+    ``TypeTag.from_str`` parses the textual form, for example ``u64``,
+    ``vector<vector<u8>>`` or ``0x1::option::Option<vector<u8>>``.
+    """
 
     BOOL: int = 0
     U8: int = 1
@@ -44,233 +53,165 @@ class TypeTag(Deserializable, Serializable):
         return self.__str__()
 
     @staticmethod
+    def from_str(type_tag: str) -> TypeTag:
+        """Parse a type such as ``u64``, ``vector<u8>`` or
+        ``0x1::option::Option<vector<u8>>``.
+
+        Raises ``ValueError`` if the string is not a well-formed type.
+        """
+        return _TypeTagParser(type_tag).parse()
+
+    @staticmethod
     def deserialize(deserializer: Deserializer) -> TypeTag:
         variant = deserializer.uleb128()
-        if variant == TypeTag.BOOL:
-            return TypeTag(BoolTag.deserialize(deserializer))
-        elif variant == TypeTag.U8:
-            return TypeTag(U8Tag.deserialize(deserializer))
-        elif variant == TypeTag.U16:
-            return TypeTag(U16Tag.deserialize(deserializer))
-        elif variant == TypeTag.U32:
-            return TypeTag(U32Tag.deserialize(deserializer))
-        elif variant == TypeTag.U64:
-            return TypeTag(U64Tag.deserialize(deserializer))
-        elif variant == TypeTag.U128:
-            return TypeTag(U128Tag.deserialize(deserializer))
-        elif variant == TypeTag.U256:
-            return TypeTag(U256Tag.deserialize(deserializer))
-        elif variant == TypeTag.ACCOUNT_ADDRESS:
-            return TypeTag(AccountAddressTag.deserialize(deserializer))
-        elif variant == TypeTag.SIGNER or variant == TypeTag.VECTOR:
-            raise NotImplementedError
-        elif variant == TypeTag.STRUCT:
+        primitive = _PRIMITIVE_TAGS_BY_VARIANT.get(variant)
+        if primitive is not None:
+            return TypeTag(primitive.deserialize(deserializer))
+        if variant == TypeTag.VECTOR:
+            return TypeTag(VectorTag.deserialize(deserializer))
+        if variant == TypeTag.STRUCT:
             return TypeTag(StructTag.deserialize(deserializer))
-        raise NotImplementedError
+        raise ValueError(f"Unknown type tag variant {variant}")
 
     def serialize(self, serializer: Serializer):
         serializer.uleb128(self.value.variant())
         serializer.struct(self.value)
 
 
-class BoolTag(Deserializable, Serializable):
-    value: bool
+class _PrimitiveTag(Deserializable, Serializable):
+    """Base of the type tags that have no payload.
 
-    def __init__(self, value: bool):
+    The constructor accepts, and ignores, one optional argument. Earlier versions
+    stored a value in these classes and serialised it after the variant byte, which
+    produced bytes the node rejects. Code that still writes ``U64Tag(0)`` keeps
+    working and now gets the correct encoding; new code should write ``U64Tag()``.
+    """
+
+    VARIANT: typing.ClassVar[int]
+    NAME: typing.ClassVar[str]
+
+    def __init__(self, value: typing.Any = None):
+        pass
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, _PrimitiveTag):
+            return NotImplemented
+        return type(self) is type(other)
+
+    def __hash__(self) -> int:
+        return hash(self.VARIANT)
+
+    def __str__(self):
+        return self.NAME
+
+    def __repr__(self):
+        return f"{type(self).__name__}()"
+
+    def variant(self):
+        return self.VARIANT
+
+    @classmethod
+    def deserialize(cls, _deserializer: Deserializer):
+        return cls()
+
+    def serialize(self, serializer: Serializer):
+        pass
+
+
+class BoolTag(_PrimitiveTag):
+    VARIANT = TypeTag.BOOL
+    NAME = "bool"
+
+
+class U8Tag(_PrimitiveTag):
+    VARIANT = TypeTag.U8
+    NAME = "u8"
+
+
+class U16Tag(_PrimitiveTag):
+    VARIANT = TypeTag.U16
+    NAME = "u16"
+
+
+class U32Tag(_PrimitiveTag):
+    VARIANT = TypeTag.U32
+    NAME = "u32"
+
+
+class U64Tag(_PrimitiveTag):
+    VARIANT = TypeTag.U64
+    NAME = "u64"
+
+
+class U128Tag(_PrimitiveTag):
+    VARIANT = TypeTag.U128
+    NAME = "u128"
+
+
+class U256Tag(_PrimitiveTag):
+    VARIANT = TypeTag.U256
+    NAME = "u256"
+
+
+class AccountAddressTag(_PrimitiveTag):
+    VARIANT = TypeTag.ACCOUNT_ADDRESS
+    NAME = "address"
+
+
+class SignerTag(_PrimitiveTag):
+    VARIANT = TypeTag.SIGNER
+    NAME = "signer"
+
+
+_PRIMITIVE_TAGS: tuple[type[_PrimitiveTag], ...] = (
+    BoolTag,
+    U8Tag,
+    U16Tag,
+    U32Tag,
+    U64Tag,
+    U128Tag,
+    U256Tag,
+    AccountAddressTag,
+    SignerTag,
+)
+_PRIMITIVE_TAGS_BY_VARIANT: dict[int, type[_PrimitiveTag]] = {
+    tag.VARIANT: tag for tag in _PRIMITIVE_TAGS
+}
+_PRIMITIVE_TAGS_BY_NAME: dict[str, type[_PrimitiveTag]] = {
+    tag.NAME: tag for tag in _PRIMITIVE_TAGS
+}
+
+
+class VectorTag(Deserializable, Serializable):
+    """``vector<T>``. ``value`` is the element ``TypeTag``."""
+
+    value: TypeTag
+
+    def __init__(self, value: typing.Any):
+        if not isinstance(value, TypeTag):
+            value = TypeTag(value)
         self.value = value
 
     def __eq__(self, other: object) -> bool:
-        if not isinstance(other, BoolTag):
+        if not isinstance(other, VectorTag):
             return NotImplemented
         return self.value == other.value
 
     def __str__(self):
-        return self.value.__str__()
+        return f"vector<{self.value}>"
+
+    def __repr__(self):
+        return self.__str__()
 
     def variant(self):
-        return TypeTag.BOOL
+        return TypeTag.VECTOR
 
     @staticmethod
-    def deserialize(deserializer: Deserializer) -> BoolTag:
-        return BoolTag(deserializer.bool())
+    def deserialize(deserializer: Deserializer) -> VectorTag:
+        return VectorTag(TypeTag.deserialize(deserializer))
 
     def serialize(self, serializer: Serializer):
-        serializer.bool(self.value)
-
-
-class U8Tag(Deserializable, Serializable):
-    value: int
-
-    def __init__(self, value: int):
-        self.value = value
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, U8Tag):
-            return NotImplemented
-        return self.value == other.value
-
-    def __str__(self):
-        return self.value.__str__()
-
-    def variant(self):
-        return TypeTag.U8
-
-    @staticmethod
-    def deserialize(deserializer: Deserializer) -> U8Tag:
-        return U8Tag(deserializer.u8())
-
-    def serialize(self, serializer: Serializer):
-        serializer.u8(self.value)
-
-
-class U16Tag(Deserializable, Serializable):
-    value: int
-
-    def __init__(self, value: int):
-        self.value = value
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, U16Tag):
-            return NotImplemented
-        return self.value == other.value
-
-    def __str__(self):
-        return self.value.__str__()
-
-    def variant(self):
-        return TypeTag.U16
-
-    @staticmethod
-    def deserialize(deserializer: Deserializer) -> U16Tag:
-        return U16Tag(deserializer.u16())
-
-    def serialize(self, serializer: Serializer):
-        serializer.u16(self.value)
-
-
-class U32Tag(Deserializable, Serializable):
-    value: int
-
-    def __init__(self, value: int):
-        self.value = value
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, U32Tag):
-            return NotImplemented
-        return self.value == other.value
-
-    def __str__(self):
-        return self.value.__str__()
-
-    def variant(self):
-        return TypeTag.U32
-
-    @staticmethod
-    def deserialize(deserializer: Deserializer) -> U32Tag:
-        return U32Tag(deserializer.u32())
-
-    def serialize(self, serializer: Serializer):
-        serializer.u32(self.value)
-
-
-class U64Tag(Deserializable, Serializable):
-    value: int
-
-    def __init__(self, value: int):
-        self.value = value
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, U64Tag):
-            return NotImplemented
-        return self.value == other.value
-
-    def __str__(self):
-        return self.value.__str__()
-
-    def variant(self):
-        return TypeTag.U64
-
-    @staticmethod
-    def deserialize(deserializer: Deserializer) -> U64Tag:
-        return U64Tag(deserializer.u64())
-
-    def serialize(self, serializer: Serializer):
-        serializer.u64(self.value)
-
-
-class U128Tag(Deserializable, Serializable):
-    value: int
-
-    def __init__(self, value: int):
-        self.value = value
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, U128Tag):
-            return NotImplemented
-        return self.value == other.value
-
-    def __str__(self):
-        return self.value.__str__()
-
-    def variant(self):
-        return TypeTag.U128
-
-    @staticmethod
-    def deserialize(deserializer: Deserializer) -> U128Tag:
-        return U128Tag(deserializer.u128())
-
-    def serialize(self, serializer: Serializer):
-        serializer.u128(self.value)
-
-
-class U256Tag(Deserializable, Serializable):
-    value: int
-
-    def __init__(self, value: int):
-        self.value = value
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, U256Tag):
-            return NotImplemented
-        return self.value == other.value
-
-    def __str__(self):
-        return self.value.__str__()
-
-    def variant(self):
-        return TypeTag.U256
-
-    @staticmethod
-    def deserialize(deserializer: Deserializer) -> U256Tag:
-        return U256Tag(deserializer.u256())
-
-    def serialize(self, serializer: Serializer):
-        serializer.u256(self.value)
-
-
-class AccountAddressTag(Deserializable, Serializable):
-    value: AccountAddress
-
-    def __init__(self, value: AccountAddress):
-        self.value = value
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, AccountAddressTag):
-            return NotImplemented
-        return self.value == other.value
-
-    def __str__(self):
-        return self.value.__str__()
-
-    def variant(self):
-        return TypeTag.ACCOUNT_ADDRESS
-
-    @staticmethod
-    def deserialize(deserializer: Deserializer) -> AccountAddressTag:
-        return AccountAddressTag(deserializer.struct(AccountAddress))
-
-    def serialize(self, serializer: Serializer):
-        serializer.struct(self.value)
+        self.value.serialize(serializer)
 
 
 class StructTag(Deserializable, Serializable):
@@ -304,54 +245,20 @@ class StructTag(Deserializable, Serializable):
             value += ">"
         return value
 
+    def __repr__(self) -> str:
+        return self.__str__()
+
     @staticmethod
     def from_str(type_tag: str) -> StructTag:
-        return StructTag._from_str_internal(type_tag, 0)[0][0].value
+        """Parse a struct such as ``0x1::option::Option<vector<u8>>``.
 
-    @staticmethod
-    def _from_str_internal(type_tag: str, index: int) -> tuple[list[TypeTag], int]:
-        name = ""
-        tags = []
-        inner_tags: list[TypeTag] = []
-
-        while index < len(type_tag):
-            letter = type_tag[index]
-            index += 1
-
-            if letter == " ":
-                continue
-
-            if letter == "<":
-                (inner_tags, index) = StructTag._from_str_internal(type_tag, index)
-            elif letter == ",":
-                split = name.split("::")
-                tag = TypeTag(
-                    StructTag(
-                        AccountAddress.from_str_relaxed(split[0]),
-                        split[1],
-                        split[2],
-                        inner_tags,
-                    )
-                )
-                tags.append(tag)
-                name = ""
-                inner_tags = []
-            elif letter == ">":
-                break
-            else:
-                name += letter
-
-        split = name.split("::")
-        tag = TypeTag(
-            StructTag(
-                AccountAddress.from_str_relaxed(split[0]),
-                split[1],
-                split[2],
-                inner_tags,
-            )
-        )
-        tags.append(tag)
-        return (tags, index)
+        Type arguments may be any type, nested to any depth. Raises ``ValueError`` if
+        the string is malformed or is not a struct.
+        """
+        parsed = TypeTag.from_str(type_tag).value
+        if not isinstance(parsed, StructTag):
+            raise ValueError(f"Not a struct type: {type_tag!r}")
+        return parsed
 
     def variant(self):
         return TypeTag.STRUCT
@@ -369,3 +276,86 @@ class StructTag(Deserializable, Serializable):
         serializer.str(self.module)
         serializer.str(self.name)
         serializer.sequence(self.type_args, Serializer.struct)
+
+
+_TOKEN = re.compile(r"\s*(::|<|>|,|[A-Za-z0-9_]+)")
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
+class _TypeTagParser:
+    """Recursive-descent parser for the textual form of a ``TypeTag``."""
+
+    def __init__(self, text: str):
+        self.text = text
+        self.tokens: list[str] = []
+        position = 0
+        while text[position:].strip():
+            match = _TOKEN.match(text, position)
+            if match is None:
+                raise self._error(f"unexpected character at offset {position}")
+            self.tokens.append(match.group(1))
+            position = match.end()
+        self.index = 0
+
+    def _error(self, message: str) -> ValueError:
+        return ValueError(f"Invalid type tag {self.text!r}: {message}")
+
+    def _peek(self) -> str | None:
+        return self.tokens[self.index] if self.index < len(self.tokens) else None
+
+    def _next(self) -> str:
+        token = self._peek()
+        if token is None:
+            raise self._error("unexpected end of input")
+        self.index += 1
+        return token
+
+    def _expect(self, expected: str) -> None:
+        token = self._next()
+        if token != expected:
+            raise self._error(f"expected {expected!r}, found {token!r}")
+
+    def _identifier(self) -> str:
+        token = self._next()
+        if not _IDENTIFIER.match(token):
+            raise self._error(f"expected an identifier, found {token!r}")
+        return token
+
+    def parse(self) -> TypeTag:
+        tag = self._type()
+        if self._peek() is not None:
+            raise self._error(f"unexpected {self._peek()!r} after the type")
+        return tag
+
+    def _type(self) -> TypeTag:
+        token = self._next()
+        primitive = _PRIMITIVE_TAGS_BY_NAME.get(token)
+        if primitive is not None:
+            return TypeTag(primitive())
+        if token == "vector":
+            self._expect("<")
+            inner = self._type()
+            self._expect(">")
+            return TypeTag(VectorTag(inner))
+        return self._struct(token)
+
+    def _struct(self, address_token: str) -> TypeTag:
+        try:
+            address = AccountAddress.from_str_relaxed(address_token)
+        except (RuntimeError, ValueError):
+            raise self._error(
+                f"unknown type or invalid address {address_token!r}"
+            ) from None
+        self._expect("::")
+        module = self._identifier()
+        self._expect("::")
+        name = self._identifier()
+        type_args: list[TypeTag] = []
+        if self._peek() == "<":
+            self._next()
+            type_args.append(self._type())
+            while self._peek() == ",":
+                self._next()
+                type_args.append(self._type())
+            self._expect(">")
+        return TypeTag(StructTag(address, module, name, type_args))
