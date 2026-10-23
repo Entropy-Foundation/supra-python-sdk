@@ -485,13 +485,13 @@ class SupraClient(
         raw_transaction: RawTransaction,
         to_signed: Callable[[RawTransaction], SignedTransaction],
     ) -> dict[str, Any]:
-        """Simulates an unsigned copy of the transaction that `to_signed` builds; the transaction is not changed."""
-        signed = to_signed(raw_transaction)
-        authenticator_clone = copy.deepcopy(signed.authenticator)
-        authenticator_clone.unset_signature()
-        unsigned_copy = SignedTransaction(signed.transaction, authenticator_clone)
+        """Simulates the transaction that `to_signed` builds from `raw_transaction`.
+
+        The signed transaction is made here and discarded, so `simulate_transaction`, which replaces the signatures of
+        the object it is given, cannot affect a transaction of the caller.
+        """
         try:
-            return await self.simulate(SupraTransaction(unsigned_copy).to_bytes())
+            return await self.simulate_transaction(to_signed(raw_transaction))
         except ApiError as error:
             raise MaxGasEstimationError(
                 f"Simulation of the transaction to estimate max gas failed: {error}; set max_gas_amount"
