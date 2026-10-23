@@ -17,6 +17,8 @@ from supra_sdk.clients.rest.rest_types import (
     AutomatedTransactionsPagination,
     Pagination,
     PaginationWithOrder,
+    address_segment,
+    encode_path_segment,
 )
 
 
@@ -41,7 +43,9 @@ class AccountRestClient(RestClient):
             dict[str, str]: The authentication key and sequence number of the given account.
 
         """
-        endpoint = ACCOUNT_ENDPOINT.format(account_address=account_address)
+        endpoint = ACCOUNT_ENDPOINT.format(
+            account_address=address_segment(account_address, "account_address")
+        )
         return (await self.api_client.get(endpoint=endpoint)).json()
 
     async def account_resource(
@@ -60,7 +64,8 @@ class AccountRestClient(RestClient):
 
         """
         endpoint = ACCOUNT_RESOURCE_ENDPOINT.format(
-            account_address=account_address, resource_type=resource_type
+            account_address=address_segment(account_address, "account_address"),
+            resource_type=encode_path_segment(resource_type, "resource_type"),
         )
         return (await self.api_client.get(endpoint=endpoint)).json()
 
@@ -81,7 +86,9 @@ class AccountRestClient(RestClient):
                 - str: Cursor to retrieve the next page.
 
         """
-        endpoint = ACCOUNT_RESOURCES_ENDPOINT.format(account_address=account_address)
+        endpoint = ACCOUNT_RESOURCES_ENDPOINT.format(
+            account_address=address_segment(account_address, "account_address")
+        )
         params = pagination.to_params() if pagination else {}
         response = await self.api_client.get(endpoint=endpoint, params=params)
         return response.json(), response.headers.get("x-supra-cursor", "")
@@ -102,7 +109,8 @@ class AccountRestClient(RestClient):
 
         """
         endpoint = ACCOUNT_MODULE_ENDPOINT.format(
-            account_address=account_address, module_name=module_name
+            account_address=address_segment(account_address, "account_address"),
+            module_name=encode_path_segment(module_name, "module_name"),
         )
         return (await self.api_client.get(endpoint=endpoint)).json()
 
@@ -123,7 +131,9 @@ class AccountRestClient(RestClient):
                 - str: Cursor to retrieve the next page.
 
         """
-        endpoint = ACCOUNT_MODULES_ENDPOINT.format(account_address=account_address)
+        endpoint = ACCOUNT_MODULES_ENDPOINT.format(
+            account_address=address_segment(account_address, "account_address")
+        )
         params = pagination.to_params() if pagination else {}
         response = await self.api_client.get(endpoint=endpoint, params=params)
         return response.json(), response.headers.get("x-supra-cursor", "")
@@ -144,7 +154,9 @@ class AccountRestClient(RestClient):
             list[dict[str, Any]]: Details of finalized transactions sent by a given account.
 
         """
-        endpoint = ACCOUNT_TRANSACTIONS_ENDPOINT.format(account_address=account_address)
+        endpoint = ACCOUNT_TRANSACTIONS_ENDPOINT.format(
+            account_address=address_segment(account_address, "account_address")
+        )
         params = pagination.to_params() if pagination else {}
         return (await self.api_client.get(endpoint=endpoint, params=params)).json()
 
@@ -167,7 +179,7 @@ class AccountRestClient(RestClient):
 
         """
         endpoint = ACCOUNT_COIN_TRANSACTIONS_ENDPOINT.format(
-            account_address=account_address
+            account_address=address_segment(account_address, "account_address")
         )
         params = pagination.to_params() if pagination else {}
         response = await self.api_client.get(endpoint=endpoint, params=params)
@@ -193,7 +205,7 @@ class AccountRestClient(RestClient):
 
         """
         endpoint = ACCOUNT_AUTOMATED_TRANSACTIONS_ENDPOINT.format(
-            account_address=account_address
+            account_address=address_segment(account_address, "account_address")
         )
         params = pagination.to_params() if pagination else {}
         response = await self.api_client.get(endpoint=endpoint, params=params)

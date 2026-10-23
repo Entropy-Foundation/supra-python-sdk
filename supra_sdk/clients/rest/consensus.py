@@ -6,6 +6,7 @@ from supra_sdk.clients.rest.rest_types import (
     COMMITTEE_AUTHORIZATION_ENDPOINT,
     CONSENSUS_BLOCK_BY_HEIGHT_ENDPOINT,
     LATEST_CONSENSUS_BLOCK_ENDPOINT,
+    uint_segment,
 )
 
 
@@ -44,7 +45,9 @@ class ConsensusRestClient(RestClient):
 
         """
         self.api_client.api_client_config.raise_if_access_token_not_exists()
-        endpoint = CONSENSUS_BLOCK_BY_HEIGHT_ENDPOINT.format(height=height)
+        endpoint = CONSENSUS_BLOCK_BY_HEIGHT_ENDPOINT.format(
+            height=uint_segment(height, "height")
+        )
         params = {"with_batches": str(with_batches).lower()}
         return (await self.api_client.get(endpoint=endpoint, params=params)).read()
 
@@ -59,5 +62,7 @@ class ConsensusRestClient(RestClient):
 
         """
         self.api_client.api_client_config.raise_if_access_token_not_exists()
-        endpoint = COMMITTEE_AUTHORIZATION_ENDPOINT.format(epoch=epoch)
+        endpoint = COMMITTEE_AUTHORIZATION_ENDPOINT.format(
+            epoch=uint_segment(epoch, "epoch")
+        )
         return (await self.api_client.get(endpoint=endpoint)).read()

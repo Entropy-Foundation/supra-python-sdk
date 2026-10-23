@@ -10,6 +10,8 @@ from supra_sdk.clients.rest.rest_types import (
     BLOCK_TRANSACTIONS_ENDPOINT,
     LATEST_BLOCK_ENDPOINT,
     TransactionType,
+    hash_segment,
+    uint_segment,
 )
 
 
@@ -40,7 +42,9 @@ class BlockRestClient(RestClient):
             dict[str, Any]: Header and execution output statistics of the block with the given hash.
 
         """
-        endpoint = BLOCK_BY_HASH_ENDPOINT.format(block_hash=block_hash)
+        endpoint = BLOCK_BY_HASH_ENDPOINT.format(
+            block_hash=hash_segment(block_hash, "block_hash")
+        )
         return (await self.api_client.get(endpoint=endpoint)).json()
 
     async def block_by_height(
@@ -61,7 +65,9 @@ class BlockRestClient(RestClient):
             dict[str, Any]: Information about the block that has been finalized at the given height.
 
         """
-        endpoint = BLOCK_BY_HEIGHT_ENDPOINT.format(height=height)
+        endpoint = BLOCK_BY_HEIGHT_ENDPOINT.format(
+            height=uint_segment(height, "height")
+        )
         params: dict[str, str | bool] = {
             "with_finalized_transactions": with_finalized_transaction
         }
@@ -84,7 +90,9 @@ class BlockRestClient(RestClient):
             list[str]: List transaction's hash that were finalized in the given block.
 
         """
-        endpoint = BLOCK_TRANSACTIONS_ENDPOINT.format(block_hash=block_hash)
+        endpoint = BLOCK_TRANSACTIONS_ENDPOINT.format(
+            block_hash=hash_segment(block_hash, "block_hash")
+        )
         params = (
             {"transaction_type": transaction_type.value} if transaction_type else {}
         )

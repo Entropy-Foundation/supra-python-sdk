@@ -10,6 +10,8 @@ from supra_sdk.clients.rest.rest_types import (
     TABLE_ITEMS_ENDPOINT,
     VIEW_FUNCTION_ENDPOINT,
     EventsPagination,
+    address_segment,
+    encode_path_segment,
 )
 
 
@@ -77,7 +79,9 @@ class GeneralRestClient(RestClient):
             dict[str, Any]: Item associated with the key in the table.
 
         """
-        endpoint = TABLE_ITEMS_ENDPOINT.format(table_handle=table_handle)
+        endpoint = TABLE_ITEMS_ENDPOINT.format(
+            table_handle=address_segment(table_handle, "table_handle")
+        )
         data = {
             "key_type": key_type,
             "value_type": value_type,
@@ -100,7 +104,9 @@ class GeneralRestClient(RestClient):
                 - str: Cursor to retrieve the next page.
 
         """
-        endpoint = EVENTS_BY_TYPE_ENDPOINT.format(event_type=event_type)
+        endpoint = EVENTS_BY_TYPE_ENDPOINT.format(
+            event_type=encode_path_segment(event_type, "event_type")
+        )
         params = pagination.to_params() if pagination else {}
         response = await self.api_client.get(endpoint=endpoint, params=params)
         return response.json()["data"], response.headers.get("x-supra-cursor", "")

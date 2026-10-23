@@ -1,11 +1,92 @@
 # Copyright © Supra
 # SPDX-License-Identifier: Apache-2.0
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
+from urllib.parse import quote
+
+from supra_sdk.account_address import AccountAddress
 
 RPC_API_PREFIX = "rpc/v3"
+
+_HEX_HASH = re.compile(r"(0x)?[0-9a-fA-F]+")
+
+
+def encode_path_segment(value: str, name: str = "value") -> str:
+    """Percent-encodes a caller-supplied value so that it forms exactly one URL path segment.
+
+    Every reserved character, including `/`, `?`, `#`, `<`, `>`, `:` and `,`, is encoded. The node decodes
+    path segments before parsing them, so a Move type such as
+    `0x1::coin::CoinStore<0x1::supra_coin::SupraCoin>` reaches it unchanged.
+
+    Args:
+        value (str): The value to place in a path segment.
+        name (str): Name of the parameter, used in the error message.
+
+    Raises:
+        ValueError: If `value` is not a non-empty string.
+
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{name} must be a non-empty string")
+    return quote(value, safe="")
+
+
+def address_segment(value: AccountAddress | str, name: str = "address") -> str:
+    """Validates an account address and returns it as one path segment.
+
+    Args:
+        value (AccountAddress | str): An `AccountAddress`, or a hex string accepted by
+            `AccountAddress.from_str_relaxed`.
+        name (str): Name of the parameter, used in the error message.
+
+    Raises:
+        ValueError: If `value` is not a valid account address.
+
+    """
+    if isinstance(value, AccountAddress):
+        return quote(str(value), safe="")
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be an AccountAddress or a hex string")
+    try:
+        return quote(str(AccountAddress.from_str_relaxed(value)), safe="")
+    except (RuntimeError, ValueError) as e:
+        raise ValueError(f"{name} is not a valid account address: {value!r}") from e
+
+
+def hash_segment(value: str, name: str = "hash") -> str:
+    """Validates a hex-encoded hash (with or without a `0x` prefix) and returns it as one path segment.
+
+    Args:
+        value (str): The hash.
+        name (str): Name of the parameter, used in the error message.
+
+    Raises:
+        ValueError: If `value` is not a hex string.
+
+    """
+    if not isinstance(value, str) or not _HEX_HASH.fullmatch(value):
+        raise ValueError(f"{name} must be a hex string: {value!r}")
+    return quote(value, safe="")
+
+
+def uint_segment(value: int, name: str = "value") -> str:
+    """Validates a non-negative integer and returns it as one path segment.
+
+    Args:
+        value (int): The integer, e.g. a block height or an epoch.
+        name (str): Name of the parameter, used in the error message.
+
+    Raises:
+        ValueError: If `value` is not a non-negative integer.
+
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be a non-negative integer: {value!r}")
+    return str(value)
+
 
 # Account endpoints
 ACCOUNT_ENDPOINT = f"{RPC_API_PREFIX}/accounts/{{account_address}}"
@@ -179,7 +260,7 @@ class EventsPagination:
 
         """
         params: dict[str, Any] = {}
-        if self.start_height:
+        if self.start_height is not None:
             params["start_height"] = self.start_height
         if self.end_height is not None:
             params["end_height"] = self.end_height

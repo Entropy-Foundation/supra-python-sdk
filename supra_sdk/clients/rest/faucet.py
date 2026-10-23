@@ -8,6 +8,8 @@ from supra_sdk.clients.rest.rest_client import RestClient
 from supra_sdk.clients.rest.rest_types import (
     FAUCET_ENDPOINT,
     FAUCET_TRANSACTION_ENDPOINT,
+    address_segment,
+    hash_segment,
 )
 
 
@@ -29,7 +31,7 @@ class FaucetRestClient(RestClient):
             str | None: Faucet transaction hash if faucet request is accepted else None.
 
         """
-        endpoint = FAUCET_ENDPOINT.format(address=address)
+        endpoint = FAUCET_ENDPOINT.format(address=address_segment(address, "address"))
         res_data = (await self.api_client.get(endpoint=endpoint)).json()
         return res_data.get("Accepted", None)
 
@@ -43,5 +45,7 @@ class FaucetRestClient(RestClient):
             dict[str, Any]: Faucet transaction details.
 
         """
-        endpoint = FAUCET_TRANSACTION_ENDPOINT.format(hash=tx_hash)
+        endpoint = FAUCET_TRANSACTION_ENDPOINT.format(
+            hash=hash_segment(tx_hash, "tx_hash")
+        )
         return (await self.api_client.get(endpoint=endpoint)).json()
