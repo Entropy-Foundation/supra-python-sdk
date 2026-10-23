@@ -10,6 +10,7 @@ from supra_sdk.clients.rest.rest_types import (
     BLOCK_TRANSACTIONS_ENDPOINT,
     LATEST_BLOCK_ENDPOINT,
     TransactionType,
+    format_endpoint,
 )
 
 
@@ -40,19 +41,19 @@ class BlockRestClient(RestClient):
             dict[str, Any]: Header and execution output statistics of the block with the given hash.
 
         """
-        endpoint = BLOCK_BY_HASH_ENDPOINT.format(block_hash=block_hash)
+        endpoint = format_endpoint(BLOCK_BY_HASH_ENDPOINT, block_hash=block_hash)
         return (await self.api_client.get(endpoint=endpoint)).json()
 
     async def block_by_height(
         self,
-        height: int,
+        height: int | str,
         transaction_type: TransactionType | None = None,
         with_finalized_transaction: bool = False,
     ) -> dict[str, Any]:
         """Retrieves information about the block that has been finalized at the given height.
 
         Args:
-            height (int): The height of the block.
+            height (int | str): The height of the block, as a non-negative integer or a string of decimal digits.
             transaction_type (TransactionType | None): Transaction type to query. If missing any/all type of
                 transactions will be looked for. Default to None.
             with_finalized_transaction (bool): Whether to include finalized transactions or not. Default to False.
@@ -61,7 +62,7 @@ class BlockRestClient(RestClient):
             dict[str, Any]: Information about the block that has been finalized at the given height.
 
         """
-        endpoint = BLOCK_BY_HEIGHT_ENDPOINT.format(height=height)
+        endpoint = format_endpoint(BLOCK_BY_HEIGHT_ENDPOINT, height=height)
         params: dict[str, str | bool] = {
             "with_finalized_transactions": with_finalized_transaction
         }
@@ -84,7 +85,7 @@ class BlockRestClient(RestClient):
             list[str]: List transaction's hash that were finalized in the given block.
 
         """
-        endpoint = BLOCK_TRANSACTIONS_ENDPOINT.format(block_hash=block_hash)
+        endpoint = format_endpoint(BLOCK_TRANSACTIONS_ENDPOINT, block_hash=block_hash)
         params = (
             {"transaction_type": transaction_type.value} if transaction_type else {}
         )

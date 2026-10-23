@@ -1,11 +1,143 @@
 # Copyright © Supra
 # SPDX-License-Identifier: Apache-2.0
 
+import re
+import string
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
+from urllib.parse import quote
+
+from supra_sdk.account_address import AccountAddress
 
 RPC_API_PREFIX = "rpc/v3"
+
+_HEX_HASH = re.compile(r"(0x)?[0-9a-fA-F]{64}")
+
+
+def encode_path_segment(value: str, name: str = "value") -> str:
+    """Percent-encodes a caller-supplied value so that it forms exactly one URL path segment.
+
+    Every reserved character, including `/`, `?`, `#`, `<`, `>`, `:` and `,`, is encoded. The node decodes
+    path segments before parsing them, so a Move type such as
+    `0x1::coin::CoinStore<0x1::supra_coin::SupraCoin>` reaches it unchanged.
+
+    Args:
+        value (str): The value to place in a path segment.
+        name (str): Name of the parameter, used in the error message.
+
+    Raises:
+        ValueError: If `value` is not a non-empty string.
+
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{name} must be a non-empty string")
+    return quote(value, safe="")
+
+
+def address_segment(value: AccountAddress | str, name: str = "address") -> str:
+    """Validates an account address and returns it as one path segment.
+
+    Args:
+        value (AccountAddress | str): An `AccountAddress`, or a hex string accepted by
+            `AccountAddress.from_str_relaxed`.
+        name (str): Name of the parameter, used in the error message.
+
+    Raises:
+        ValueError: If `value` is not a valid account address.
+
+    """
+    if isinstance(value, AccountAddress):
+        return str(value)
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be an AccountAddress or a hex string")
+    try:
+        return str(AccountAddress.from_str_relaxed(value))
+    except (RuntimeError, ValueError) as e:
+        raise ValueError(f"{name} is not a valid account address: {value!r}") from e
+
+
+def hash_segment(value: str, name: str = "hash") -> str:
+    """Validates a hash and returns it as one path segment.
+
+    Transaction and block hashes are 32 bytes: 64 hex digits, optionally prefixed with `0x`.
+
+    Args:
+        value (str): The hash.
+        name (str): Name of the parameter, used in the error message.
+
+    Raises:
+        ValueError: If `value` is not 64 hex digits with an optional `0x` prefix.
+
+    """
+    if not isinstance(value, str) or not _HEX_HASH.fullmatch(value):
+        raise ValueError(
+            f"{name} must be 64 hex digits, optionally prefixed with 0x: {value!r}"
+        )
+    return value
+
+
+def uint_segment(value: int | str, name: str = "value") -> str:
+    """Validates a non-negative integer and returns it as one path segment.
+
+    Args:
+        value (int | str): A non-negative integer, or a string of decimal digits, e.g. a block height or an epoch.
+        name (str): Name of the parameter, used in the error message.
+
+    Raises:
+        ValueError: If `value` is not a non-negative integer or a string of decimal digits.
+
+    """
+    if isinstance(value, str) and value.isascii() and value.isdigit():
+        return str(int(value))
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return str(value)
+    raise ValueError(
+        f"{name} must be a non-negative integer or a string of decimal digits: {value!r}"
+    )
+
+
+_ADDRESS_PLACEHOLDERS = frozenset({"address", "account_address", "table_handle"})
+_UINT_PLACEHOLDERS = frozenset({"height", "epoch"})
+
+
+def format_endpoint(template: str, **values: Any) -> str:
+    """Fills the placeholders of an endpoint template with validated, percent-encoded path segments.
+
+    Each value is validated and encoded according to its placeholder name: address placeholders (`address`,
+    `account_address`, `table_handle`) as account addresses, names ending in `hash` as hashes, `height` and `epoch`
+    as non-negative integers, and every other name as a plain string encoded as a single segment.
+
+    Args:
+        template (str): Endpoint template with `{name}` placeholders.
+        **values: One value for each placeholder.
+
+    Returns:
+        str: The endpoint path, relative to the base URL.
+
+    Raises:
+        ValueError: If a value is invalid, or the values do not match the template's placeholders.
+
+    """
+    placeholders = {
+        field for _, field, _, _ in string.Formatter().parse(template) if field
+    }
+    if placeholders != set(values):
+        raise ValueError(
+            f"endpoint {template!r} takes {sorted(placeholders)}, got {sorted(values)}"
+        )
+    segments = {}
+    for name, value in values.items():
+        if name in _ADDRESS_PLACEHOLDERS:
+            segments[name] = address_segment(value, name)
+        elif name.endswith("hash"):
+            segments[name] = hash_segment(value, name)
+        elif name in _UINT_PLACEHOLDERS:
+            segments[name] = uint_segment(value, name)
+        else:
+            segments[name] = encode_path_segment(value, name)
+    return template.format(**segments)
+
 
 # Account endpoints
 ACCOUNT_ENDPOINT = f"{RPC_API_PREFIX}/accounts/{{account_address}}"
@@ -179,7 +311,7 @@ class EventsPagination:
 
         """
         params: dict[str, Any] = {}
-        if self.start_height:
+        if self.start_height is not None:
             params["start_height"] = self.start_height
         if self.end_height is not None:
             params["end_height"] = self.end_height
