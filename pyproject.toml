@@ -79,6 +79,19 @@ combine-as-imports = true
 [tool.ruff.format]
 docstring-code-format = true
 
+[tool.mypy]
+python_version = "3.12"
+files = ["supra_sdk"]
+warn_unused_ignores = true
+no_implicit_optional = true
+
+[tool.coverage.run]
+source = ["supra_sdk"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+
 [tool.uv.build-backend]
 module-name = "supra_sdk"
 module-root = ""
@@ -89,6 +102,7 @@ dev = [
     "behave>=1.2.6,<2.0.0",
     "black>=25.1.0",
     "coverage>=7.10.6",
+    "mypy>=1.18.1",
     "pip>=25.2",
     "ruff>=0.13.0",
     "sphinx>=8.2.3",
