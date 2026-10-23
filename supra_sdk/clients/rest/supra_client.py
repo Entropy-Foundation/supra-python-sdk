@@ -24,7 +24,7 @@ from supra_sdk.clients.rest.general import GeneralRestClient
 from supra_sdk.clients.rest.transaction import TransactionRestClient
 from supra_sdk.transactions import (
     AutomationRegistrationParams,
-    AutomationRegistrationParamsV1,
+    AutomationTaskType,
     EntryFunction,
     FeePayerRawTransaction,
     MultiAgentRawTransaction,
@@ -432,8 +432,14 @@ class SupraClient(
         automation_fee_cap_for_epoch: int,
         automation_expiration_timestamp_secs: int,
         automation_aux_data: list[bytes],
+        automation_task_type: AutomationTaskType | None = None,
+        automation_priority: int | None = None,
     ) -> str:
         """Registers Supra automation task.
+
+        With neither ``automation_task_type`` nor ``automation_priority`` the task is
+        registered with version 1 of the registration parameters. With either, version 2
+        is used, and a missing task type is ``AutomationTaskType.USER``.
 
         Args:
             owner_account (Account): Account registering an automation task.
@@ -444,21 +450,28 @@ class SupraClient(
             automation_fee_cap_for_epoch (int): Maximum total fee for the epoch.
             automation_expiration_timestamp_secs (int): Expiration time for automation.
             automation_aux_data (list[bytes]): Auxiliary data for automation.
+            automation_task_type (AutomationTaskType | None): ``USER`` or ``SYSTEM``.
+                A ``SYSTEM`` task can only be registered by an account the registry has
+                authorised for system tasks; other accounts' registrations abort.
+                Defaults to version 1 parameters (a user task).
+            automation_priority (int | None): Priority of the task. Without a priority,
+                the registry uses the task's index as its priority.
 
         Returns:
             str: Transaction hash.
 
         """
-        automation_params_v1 = AutomationRegistrationParamsV1(
-            automated_function,
-            automation_max_gas_amount,
-            automation_gas_price_cap,
-            automation_fee_cap_for_epoch,
-            automation_expiration_timestamp_secs,
-            automation_aux_data,
-        )
         transaction_payload = TransactionPayload(
-            AutomationRegistrationParams(automation_params_v1)
+            AutomationRegistrationParams.build(
+                automated_function,
+                automation_max_gas_amount,
+                automation_gas_price_cap,
+                automation_fee_cap_for_epoch,
+                automation_expiration_timestamp_secs,
+                automation_aux_data,
+                automation_task_type,
+                automation_priority,
+            )
         )
         signed_transaction = await self.create_signed_transaction(
             owner_account,
