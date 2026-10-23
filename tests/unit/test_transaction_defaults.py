@@ -15,6 +15,7 @@ import httpx
 
 from supra_sdk.account import Account
 from supra_sdk.account_address import AccountAddress
+from supra_sdk.authenticator import FeePayerAuthenticator
 from supra_sdk.bcs import Deserializer, Serializer
 from supra_sdk.clients.api_client import ApiError
 from supra_sdk.clients.rest import MaxGasEstimationError, SupraClient, SupraClientConfig
@@ -49,6 +50,7 @@ class FakeNode:
         self.sequence_number = 7
         self.balance = 10 * 100_000_000
         self.max_ttl = 600
+        self.balances: dict[str, int] = {}
         self.view_arguments: list[list[str]] = []
         self.simulated: list[bytes] = []
         self.simulation: Callable[[], httpx.Response] = lambda: httpx.Response(
@@ -74,8 +76,10 @@ class FakeNode:
         if key[0] == "GET" and key[1].startswith(f"{PREFIX}/accounts/"):
             return httpx.Response(200, json={"sequence_number": self.sequence_number})
         if key == ("POST", f"{PREFIX}/view"):
-            self.view_arguments.append(json.loads(request.content)["arguments"])
-            return httpx.Response(200, json={"result": [str(self.balance)]})
+            arguments = json.loads(request.content)["arguments"]
+            self.view_arguments.append(arguments)
+            balance = self.balances.get(arguments[0], self.balance)
+            return httpx.Response(200, json={"result": [str(balance)]})
         if key == ("POST", f"{PREFIX}/transactions/simulate"):
             self.simulated.append(request.content)
             return self.simulation()
@@ -438,6 +442,63 @@ class TestMaxGas(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.exception.status, "Fail")
         self.assertIn("set max_gas_amount", str(context.exception))
         self.assertEqual(node.count(*SIMULATE), 2)
+
+    async def test_fee_payer_balance_caps_a_raw_transaction_of_an_empty_sender(self):
+        node = FakeNode()
+        sender, fee_payer = Account.generate(), Account.generate()
+        node.balances[str(sender.address())] = 0
+        node.balances[str(fee_payer.address())] = 800 * GAS_PRICE
+        client = make_client(node)
+        self.addAsyncCleanup(client.close)
+        raw = await client.create_raw_transaction(
+            sender, transfer_payload(), sequence_number=0, fee_payer=fee_payer
+        )
+        self.assertEqual(node.view_arguments, [[str(fee_payer.address())]])
+        self.assertEqual(raw.max_gas_amount, 800)
+        simulated = decode_simulated(node.simulated[0])
+        self.assertIsInstance(
+            simulated.authenticator.authenticator, FeePayerAuthenticator
+        )
+
+    async def test_fee_payer_without_a_balance_still_raises(self):
+        node = FakeNode()
+        sender, fee_payer = Account.generate(), Account.generate()
+        node.balances[str(fee_payer.address())] = 0
+        client = make_client(node)
+        self.addAsyncCleanup(client.close)
+        with self.assertRaises(MaxGasEstimationError):
+            await client.create_raw_transaction(
+                sender, transfer_payload(), sequence_number=0, fee_payer=fee_payer
+            )
+
+    async def test_fee_payer_address_gets_the_fallback_capped_by_its_balance(self):
+        node = FakeNode()
+        sender, fee_payer = Account.generate(), Account.generate()
+        node.balances[str(sender.address())] = 0
+        node.balances[str(fee_payer.address())] = 300 * GAS_PRICE
+        client = make_client(node)
+        self.addAsyncCleanup(client.close)
+        raw = await client.create_raw_transaction(
+            sender,
+            transfer_payload(),
+            sequence_number=0,
+            fee_payer=fee_payer.address(),
+        )
+        self.assertEqual(raw.max_gas_amount, 300)
+        self.assertEqual(node.count(*SIMULATE), 0)
+
+    async def test_fee_payer_with_explicit_max_gas_reads_no_balance(self):
+        node = FakeNode()
+        client = make_client(node)
+        self.addAsyncCleanup(client.close)
+        await client.create_raw_transaction(
+            Account.generate(),
+            transfer_payload(),
+            sequence_number=0,
+            max_gas_amount=9,
+            fee_payer=Account.generate(),
+        )
+        self.assertEqual(node.count(*VIEW), 0)
 
     async def test_example_style_transaction_for_an_address_serialises(self):
         """The multisig example builds its transactions this way: an address sender and an explicit max gas."""

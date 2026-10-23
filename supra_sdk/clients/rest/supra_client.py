@@ -381,6 +381,7 @@ class SupraClient(
         transaction_payload: TransactionPayload,
         sequence_number: int | None = None,
         max_gas_amount: int | None = None,
+        fee_payer: Account | AccountAddress | None = None,
     ) -> RawTransaction:
         """Creates a raw transaction.
 
@@ -410,6 +411,12 @@ class SupraClient(
                 including 0, is used as given without a request. Default to None.
             max_gas_amount (int | None): Max gas units for this transaction. `None` uses the config value or the
                 estimate described above. Default to None.
+            fee_payer (Account | AccountAddress | None): The account that will pay for gas when the transaction is
+                wrapped for a fee payer. Its SUPRA balance, not the sender's, caps the estimated max gas, and the
+                simulation is made in fee-payer form (with no secondary signers) when both `sender` and `fee_payer`
+                are accounts; with only the fee payer's address there is no key to simulate with and the fallback of
+                20,000 units applies. It does not change the raw transaction, which is the same for every payer; no
+                balance is read when the max gas is explicit. Default to None.
 
         Returns:
             RawTransaction: The constructed raw transaction object.
@@ -419,8 +426,21 @@ class SupraClient(
                 low to pay for any gas, or the simulation fails or does not succeed.
 
         """
+        gas_payer = None
+        to_signed = None
+        if fee_payer is not None:
+            gas_payer = (
+                fee_payer.address() if isinstance(fee_payer, Account) else fee_payer
+            )
+            if isinstance(sender, Account) and isinstance(fee_payer, Account):
+                to_signed = _fee_payer_signer(sender, fee_payer, [])
         return await self._build_raw_transaction(
-            sender, transaction_payload, sequence_number, max_gas_amount
+            sender,
+            transaction_payload,
+            sequence_number,
+            max_gas_amount,
+            to_signed,
+            gas_payer,
         )
 
     async def _build_raw_transaction(
@@ -469,7 +489,7 @@ class SupraClient(
         if max_gas_amount is None:
             max_gas_amount = self.transaction_config.max_gas_amount
         if max_gas_amount is None:
-            if to_signed is None and isinstance(sender, Account):
+            if to_signed is None and gas_payer is None and isinstance(sender, Account):
                 to_signed = _single_signer(sender)
             max_gas_amount = await self._estimate_max_gas_amount(
                 sender_address,
