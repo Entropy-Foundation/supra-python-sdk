@@ -291,17 +291,16 @@ class SupraClient(
         Args:
             sender (Account | AccountAddress): The account object or its address.
             transaction_payload (TransactionPayload): The transaction payload.
-            sequence_number (int | None): The sender's sequence number. If not provided, it will be fetched
-                automatically. Default to None.
+            sequence_number (int | None): The sender's sequence number. `None` fetches it from the node; any integer,
+                including 0, is used as given without a request. Default to None.
 
         Returns:
             RawTransaction: The constructed raw transaction object.
 
         """
         sender_address = sender.address() if isinstance(sender, Account) else sender
-        sequence_number = sequence_number or await self.account_sequence_number(
-            sender_address
-        )
+        if sequence_number is None:
+            sequence_number = await self.account_sequence_number(sender_address)
         return RawTransaction(
             sender_address,
             sequence_number,
