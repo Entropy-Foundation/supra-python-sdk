@@ -36,6 +36,14 @@ async def main():
             TransactionArgument(1, Serializer.u64),
         ],
     )
+    # Without a task type or a priority the task is registered with version 1 of the
+    # registration parameters. To use version 2, pass `automation_task_type` (USER or
+    # SYSTEM; SYSTEM needs an account the registry has authorised for system tasks)
+    # and/or `automation_priority`. Without a priority, the registry uses the task's
+    # index as its priority:
+    #
+    #     automation_task_type=AutomationTaskType.USER,
+    #     automation_priority=10,
     task_registration_tx_hash = await supra_client.register_automation_task(
         sender,
         automated_function,
