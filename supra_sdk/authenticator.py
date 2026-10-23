@@ -79,7 +79,7 @@ class Authenticator:
         elif variant == Authenticator.SINGLE_SENDER:
             authenticator = SingleSenderAuthenticator.deserialize(deserializer)
         else:
-            raise Exception(f"Invalid type: {variant}")
+            raise ValueError(f"Invalid type: {variant}")
 
         return Authenticator(authenticator)
 
@@ -139,6 +139,9 @@ class MultiEd25519Authenticator:
         if not isinstance(other, MultiEd25519Authenticator):
             return NotImplemented
         return self.public_key == other.public_key and self.signature == other.signature
+
+    def __hash__(self) -> int:
+        return hash((self.public_key, self.signature))
 
     def __str__(self) -> str:
         return f"PublicKey: {self.public_key}, Signature: {self.signature}"
@@ -360,7 +363,7 @@ class AccountAuthenticator:
         elif variant == AccountAuthenticator.MULTI_KEY:
             authenticator = MultiKeyAuthenticator.deserialize(deserializer)
         else:
-            raise Exception(f"Invalid type: {variant}")
+            raise ValueError(f"Invalid type: {variant}")
 
         return AccountAuthenticator(authenticator)
 
@@ -424,6 +427,9 @@ class MultiKeyAuthenticator:
         if not isinstance(other, MultiKeyAuthenticator):
             return NotImplemented
         return self.public_key == other.public_key and self.signature == other.signature
+
+    def __hash__(self) -> int:
+        return hash((self.public_key, self.signature))
 
     def __str__(self) -> str:
         return f"PublicKey: {self.public_key}, Signature: {self.signature}"

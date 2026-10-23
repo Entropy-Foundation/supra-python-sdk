@@ -28,6 +28,9 @@ class PublicKey(asymmetric_crypto.PublicKey):
             return NotImplemented
         return self.variant == other.variant and self.public_key == other.public_key
 
+    def __hash__(self) -> int:
+        return hash(self.to_bytes())
+
     def to_crypto_bytes(self) -> bytes:
         serializer = Serializer()
         self.serialize(serializer)
@@ -48,7 +51,10 @@ class PublicKey(asymmetric_crypto.PublicKey):
                 deserializer
             )
         else:
-            raise Exception(f"Invalid type: {variant}")
+            raise ValueError(
+                f"Unsupported public key type: variant {variant}; "
+                "only Ed25519 is supported"
+            )
 
         return PublicKey(public_key)
 
@@ -75,6 +81,9 @@ class Signature(asymmetric_crypto.Signature):
             return NotImplemented
         return self.variant == other.variant and self.signature == other.signature
 
+    def __hash__(self) -> int:
+        return hash(self.to_bytes())
+
     def get_null_signature(self) -> Signature:
         if self.variant == Signature.ED25519:
             return Signature(ed25519.Signature.get_null_signature())
@@ -90,7 +99,10 @@ class Signature(asymmetric_crypto.Signature):
                 deserializer
             )
         else:
-            raise Exception(f"Invalid type: {variant}")
+            raise ValueError(
+                f"Unsupported signature type: variant {variant}; "
+                "only Ed25519 is supported"
+            )
 
         return Signature(signature)
 
@@ -103,7 +115,7 @@ class MultiPublicKey(asymmetric_crypto.PublicKey):
     keys: list[PublicKey]
     threshold: int
 
-    MIN_KEYS = 2
+    MIN_KEYS = 1
     MAX_KEYS = 32
     MIN_THRESHOLD = 1
 
@@ -132,6 +144,9 @@ class MultiPublicKey(asymmetric_crypto.PublicKey):
         if not isinstance(other, MultiPublicKey):
             return NotImplemented
         return self.keys == other.keys and self.threshold == other.threshold
+
+    def __hash__(self) -> int:
+        return hash(self.to_bytes())
 
     def __str__(self) -> str:
         return f"{self.threshold}-of-{len(self.keys)} Multi key"
@@ -188,7 +203,10 @@ class MultiSignature(asymmetric_crypto.Signature):
         """Signatures are (key index, signature) pairs in any order; they are kept
         sorted by key index, the order the node pairs them with bitmap bits.
 
-        Raises ValueError for an index outside the bitmap or a repeated index."""
+        Raises ValueError for an empty list, an index outside the bitmap or a
+        repeated index."""
+        if not signatures:
+            raise ValueError("at least one signature is required")
         if not 1 <= bitmap_num_of_bytes <= self.MAX_BITMAP_NUM_OF_BYTES:
             raise ValueError("bitmap length is invalid")
         self.bitmap_num_of_bytes = bitmap_num_of_bytes
@@ -208,7 +226,13 @@ class MultiSignature(asymmetric_crypto.Signature):
     def __eq__(self, other: object):
         if not isinstance(other, MultiSignature):
             return NotImplemented
-        return self.signatures == other.signatures
+        return (
+            self.signatures == other.signatures
+            and self.bitmap_num_of_bytes == other.bitmap_num_of_bytes
+        )
+
+    def __hash__(self) -> int:
+        return hash(self.to_bytes())
 
     def __str__(self) -> str:
         return f"{self.signatures}"
@@ -249,9 +273,3 @@ class MultiSignature(asymmetric_crypto.Signature):
     def unset_signatures(self):
         for i, (pubkey_index, signature) in enumerate(self.signatures):
             self.signatures[i] = (pubkey_index, signature.get_null_signature())
-
-
-def index_to_bitmap_value(i: int) -> int:
-    bit = i % 8
-    byte = i // 8
-    return (128 >> bit) << (byte * 8)

@@ -90,7 +90,7 @@ class PublicKey(asymmetric_crypto.PublicKey):
     def deserialize(deserializer: Deserializer) -> PublicKey:
         key = deserializer.to_bytes()
         if len(key) != PublicKey.LENGTH:
-            raise Exception("Length mismatch")
+            raise ValueError("Length mismatch")
 
         return PublicKey(VerifyKey(key))
 
@@ -102,7 +102,7 @@ class MultiPublicKey(asymmetric_crypto.PublicKey):
     keys: list[PublicKey]
     threshold: int
 
-    MIN_KEYS = 2
+    MIN_KEYS = 1
     MAX_KEYS = 32
     MIN_THRESHOLD = 1
 
@@ -124,6 +124,9 @@ class MultiPublicKey(asymmetric_crypto.PublicKey):
         if not isinstance(other, MultiPublicKey):
             return NotImplemented
         return self.keys == other.keys and self.threshold == other.threshold
+
+    def __hash__(self) -> int:
+        return hash(bytes(self.to_crypto_bytes()))
 
     def __str__(self) -> str:
         return f"{self.threshold}-of-{len(self.keys)} Multi-Ed25519 public key"
@@ -198,7 +201,7 @@ class Signature(asymmetric_crypto.Signature):
     def deserialize(deserializer: Deserializer) -> Signature:
         signature = deserializer.to_bytes()
         if len(signature) != Signature.LENGTH:
-            raise Exception("Length mismatch")
+            raise ValueError("Length mismatch")
 
         return Signature(signature)
 
@@ -214,7 +217,10 @@ class MultiSignature(asymmetric_crypto.Signature):
         """Signatures are (key index, signature) pairs in any order; they are kept
         sorted by key index, the order the node pairs them with bitmap bits.
 
-        Raises ValueError for an index outside the bitmap or a repeated index."""
+        Raises ValueError for an empty list, an index outside the bitmap or a
+        repeated index."""
+        if not signatures:
+            raise ValueError("at least one signature is required")
         indexes = [index for index, _ in signatures]
         for index in indexes:
             if not 0 <= index < self.BITMAP_NUM_OF_BYTES * 8:
@@ -227,6 +233,9 @@ class MultiSignature(asymmetric_crypto.Signature):
         if not isinstance(other, MultiSignature):
             return NotImplemented
         return self.signatures == other.signatures
+
+    def __hash__(self) -> int:
+        return hash(self.to_bytes())
 
     def __str__(self) -> str:
         return f"{self.signatures}"

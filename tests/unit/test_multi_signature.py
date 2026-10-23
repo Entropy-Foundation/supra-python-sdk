@@ -127,7 +127,6 @@ class MultiEd25519Test(unittest.TestCase):
     def test_below_threshold_fails_verification(self):
         signature = ed25519.MultiSignature(self.sign([1]))
         self.assertFalse(self.public_key.verify(MESSAGE, signature))
-        self.assertFalse(self.public_key.verify(MESSAGE, ed25519.MultiSignature([])))
 
     def test_wrong_signature_fails_verification(self):
         signature = ed25519.MultiSignature(self.sign([0, 1], b"another message"))
@@ -153,7 +152,7 @@ class MultiEd25519Test(unittest.TestCase):
         with self.assertRaises(ValueError):
             ed25519.MultiPublicKey(self.keys, 4)
         with self.assertRaises(ValueError):
-            ed25519.MultiPublicKey(self.keys[:1], 1)
+            ed25519.MultiPublicKey([], 1)
         with self.assertRaises(ValueError):
             ed25519.MultiSignature([(32, PRIVATE_KEYS[0].sign(MESSAGE))])
         with self.assertRaises(ValueError):
@@ -278,7 +277,6 @@ class MultiKeyTest(unittest.TestCase):
     def test_below_threshold_fails_verification(self):
         signature = wrapper.MultiSignature(self.sign([1]))
         self.assertFalse(self.public_key.verify(MESSAGE, signature))
-        self.assertFalse(self.public_key.verify(MESSAGE, wrapper.MultiSignature([])))
 
     def test_wrong_signature_fails_verification(self):
         signature = wrapper.MultiSignature(self.sign([0, 1], b"another message"))
@@ -296,7 +294,7 @@ class MultiKeyTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             wrapper.MultiPublicKey(self.keys, 4)
         with self.assertRaises(ValueError):
-            wrapper.MultiPublicKey(self.keys[:1], 1)
+            wrapper.MultiPublicKey([], 1)
         with self.assertRaises(ValueError):
             wrapper.MultiSignature([(32, PRIVATE_KEYS[0].sign(MESSAGE))])
         with self.assertRaises(ValueError):
@@ -336,6 +334,132 @@ class MultiKeyTest(unittest.TestCase):
         self.assertEqual(decoded, signed)
         self.assertEqual(decoded.bytes(), encoded)
         self.assertTrue(decoded.verify())
+
+
+class DecodingAndEqualityTest(unittest.TestCase):
+    def setUp(self):
+        self.keys = [key.public_key() for key in PRIVATE_KEYS]
+
+    def test_empty_signature_list_is_refused(self):
+        with self.assertRaises(ValueError):
+            ed25519.MultiSignature([])
+        with self.assertRaises(ValueError):
+            wrapper.MultiSignature([])
+
+    def test_one_key_multi_keys_round_trip(self):
+        key = PRIVATE_KEYS[0]
+        multi_ed = ed25519.MultiPublicKey([key.public_key()], 1)
+        decoded_ed = ed25519.MultiPublicKey.from_bytes(multi_ed.to_bytes())
+        self.assertEqual(decoded_ed, multi_ed)
+
+        multi_key = wrapper.MultiPublicKey([key.public_key()], 1)
+        sender = AccountAddress.from_key(multi_key)
+        transaction = raw_transaction(sender)
+        signature = wrapper.MultiSignature([(0, key.sign(transaction.keyed()))])
+        signed = SignedTransaction(
+            transaction,
+            AccountAuthenticator(MultiKeyAuthenticator(multi_key, signature)),
+        )
+        decoded = SignedTransaction.deserialize(Deserializer(signed.bytes()))
+        self.assertEqual(decoded, signed)
+        self.assertEqual(decoded.bytes(), signed.bytes())
+        self.assertTrue(decoded.verify())
+
+        sender = AccountAddress.from_key(multi_ed)
+        transaction = raw_transaction(sender)
+        signature_ed = ed25519.MultiSignature([(0, key.sign(transaction.keyed()))])
+        signed = SignedTransaction(
+            transaction,
+            AccountAuthenticator(MultiEd25519Authenticator(multi_ed, signature_ed)),
+        )
+        decoded = SignedTransaction.deserialize(Deserializer(signed.bytes()))
+        self.assertEqual(decoded.bytes(), signed.bytes())
+        self.assertTrue(decoded.verify())
+
+    def test_truncated_input_raises_value_error(self):
+        sender = AccountAddress.from_key(ed25519.MultiPublicKey(self.keys, 2))
+        transaction = raw_transaction(sender)
+        multi_ed = ed25519.MultiPublicKey(self.keys, 2)
+        sigs = [(i, PRIVATE_KEYS[i].sign(transaction.keyed())) for i in (0, 1)]
+        signed_ed = SignedTransaction(
+            transaction,
+            AccountAuthenticator(
+                MultiEd25519Authenticator(multi_ed, ed25519.MultiSignature(sigs))
+            ),
+        )
+        multi_key = wrapper.MultiPublicKey(self.keys, 2)
+        signed_key = SignedTransaction(
+            transaction,
+            AccountAuthenticator(
+                MultiKeyAuthenticator(multi_key, wrapper.MultiSignature(sigs))
+            ),
+        )
+        for signed in (signed_ed, signed_key):
+            encoded = signed.bytes()
+            for cut in (1, 2, 5, 70, 130):
+                with self.assertRaises(ValueError):
+                    SignedTransaction.deserialize(Deserializer(encoded[:-cut]))
+
+    def test_unsupported_key_type_raises_value_error(self):
+        serializer = Serializer()
+        # A MultiKey with one key of AnyPublicKey variant 1 (Secp256k1).
+        serializer.uleb128(1)
+        serializer.uleb128(1)
+        serializer.to_bytes(bytes(65))
+        serializer.u8(1)
+        with self.assertRaisesRegex(ValueError, "Unsupported public key type"):
+            Deserializer(serializer.output()).struct(wrapper.MultiPublicKey)
+
+    def test_equality_includes_the_bitmap_length(self):
+        signatures = [(0, PRIVATE_KEYS[0].sign(MESSAGE))]
+        short = wrapper.MultiSignature(signatures, 1)
+        default = wrapper.MultiSignature(signatures)
+        self.assertNotEqual(short, default)
+        self.assertNotEqual(serialized(short), serialized(default))
+        self.assertEqual(short, wrapper.MultiSignature(signatures, 1))
+
+    def test_equal_objects_hash_equal(self):
+        signatures = [(i, PRIVATE_KEYS[i].sign(MESSAGE)) for i in (0, 1)]
+        pairs = [
+            (
+                ed25519.MultiPublicKey(self.keys, 2),
+                ed25519.MultiPublicKey(self.keys, 2),
+            ),
+            (
+                wrapper.MultiPublicKey(self.keys, 2),
+                wrapper.MultiPublicKey(self.keys, 2),
+            ),
+            (wrapper.PublicKey(self.keys[0]), wrapper.PublicKey(self.keys[0])),
+            (
+                wrapper.Signature(signatures[0][1]),
+                wrapper.Signature(signatures[0][1]),
+            ),
+            (ed25519.MultiSignature(signatures), ed25519.MultiSignature(signatures)),
+            (wrapper.MultiSignature(signatures), wrapper.MultiSignature(signatures)),
+            (
+                MultiEd25519Authenticator(
+                    ed25519.MultiPublicKey(self.keys, 2),
+                    ed25519.MultiSignature(signatures),
+                ),
+                MultiEd25519Authenticator(
+                    ed25519.MultiPublicKey(self.keys, 2),
+                    ed25519.MultiSignature(signatures),
+                ),
+            ),
+            (
+                MultiKeyAuthenticator(
+                    wrapper.MultiPublicKey(self.keys, 2),
+                    wrapper.MultiSignature(signatures),
+                ),
+                MultiKeyAuthenticator(
+                    wrapper.MultiPublicKey(self.keys, 2),
+                    wrapper.MultiSignature(signatures),
+                ),
+            ),
+        ]
+        for first, second in pairs:
+            self.assertEqual(first, second)
+            self.assertEqual(hash(first), hash(second))
 
 
 if __name__ == "__main__":
