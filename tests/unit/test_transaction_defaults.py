@@ -4,6 +4,7 @@
 """Offline tests of the defaults of a transaction: sequence number, max gas and expiration time."""
 
 import asyncio
+import json
 import time
 import unittest
 from collections.abc import Callable
@@ -14,16 +15,27 @@ import httpx
 
 from supra_sdk.account import Account
 from supra_sdk.account_address import AccountAddress
-from supra_sdk.bcs import Serializer
+from supra_sdk.bcs import Deserializer, Serializer
 from supra_sdk.clients.api_client import ApiError
-from supra_sdk.clients.rest import SupraClient, SupraClientConfig
-from supra_sdk.clients.rest.transaction_defaults import EXPIRATION_MARGIN_SECONDS
+from supra_sdk.clients.rest import MaxGasEstimationError, SupraClient, SupraClientConfig
+from supra_sdk.clients.rest.transaction_defaults import (
+    EXPIRATION_MARGIN_SECONDS,
+    FALLBACK_MAX_GAS_AMOUNT,
+    MIN_ESTIMATED_MAX_GAS_AMOUNT,
+)
 from supra_sdk.transactions import (
     EntryFunction,
+    SignedTransaction,
+    SupraTransaction,
     TransactionArgument,
     TransactionPayload,
 )
 from supra_sdk.type_tag import StructTag, TypeTag
+
+
+def decode_simulated(body: bytes) -> SignedTransaction:
+    return SupraTransaction.deserialize(Deserializer(body)).value
+
 
 PREFIX = "/rpc/v3"
 GAS_PRICE = 100_000
@@ -37,6 +49,8 @@ class FakeNode:
         self.sequence_number = 7
         self.balance = 10 * 100_000_000
         self.max_ttl = 600
+        self.view_arguments: list[list[str]] = []
+        self.simulated: list[bytes] = []
         self.simulation: Callable[[], httpx.Response] = lambda: httpx.Response(
             200, json=simulation_result(988)
         )
@@ -60,8 +74,10 @@ class FakeNode:
         if key[0] == "GET" and key[1].startswith(f"{PREFIX}/accounts/"):
             return httpx.Response(200, json={"sequence_number": self.sequence_number})
         if key == ("POST", f"{PREFIX}/view"):
+            self.view_arguments.append(json.loads(request.content)["arguments"])
             return httpx.Response(200, json={"result": [str(self.balance)]})
         if key == ("POST", f"{PREFIX}/transactions/simulate"):
+            self.simulated.append(request.content)
             return self.simulation()
         return httpx.Response(404, text=f"unexpected {key}")
 
@@ -196,6 +212,203 @@ class TestExpiration(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(await client.max_transaction_time_to_live(), 600)
         await client.close()
+
+
+SIMULATE = ("POST", f"{PREFIX}/transactions/simulate")
+VIEW = ("POST", f"{PREFIX}/view")
+
+
+class TestMaxGas(unittest.IsolatedAsyncioTestCase):
+    async def create(
+        self,
+        node: FakeNode,
+        config: SupraClientConfig | None = None,
+        **kwargs: Any,
+    ):
+        client = make_client(node, config)
+        self.addAsyncCleanup(client.close)
+        return await client.create_raw_transaction(
+            Account.generate(), transfer_payload(), sequence_number=0, **kwargs
+        )
+
+    async def test_default_is_the_simulated_gas_used_with_the_margin(self):
+        node = FakeNode()
+        node.simulation = lambda: httpx.Response(200, json=simulation_result(4_000))
+        raw = await self.create(node)
+        self.assertEqual(raw.max_gas_amount, 6_000)
+        self.assertEqual(node.count(*SIMULATE), 1)
+
+    async def test_margin_rounds_up(self):
+        node = FakeNode()
+        node.simulation = lambda: httpx.Response(200, json=simulation_result(2_001))
+        self.assertEqual((await self.create(node)).max_gas_amount, 3_002)
+
+    async def test_small_gas_used_is_raised_to_the_minimum(self):
+        node = FakeNode()
+        node.simulation = lambda: httpx.Response(200, json=simulation_result(988))
+        raw = await self.create(node)
+        self.assertEqual(raw.max_gas_amount, MIN_ESTIMATED_MAX_GAS_AMOUNT)
+
+    async def test_ten_supra_account_gets_an_affordable_default(self):
+        node = FakeNode()
+        node.balance = 10 * 100_000_000
+        raw = await self.create(node)
+        self.assertLessEqual(raw.max_gas_amount * raw.gas_unit_price, node.balance)
+
+    async def test_default_is_capped_by_the_balance(self):
+        node = FakeNode()
+        node.balance = 1_000 * GAS_PRICE + 99_999
+        node.simulation = lambda: httpx.Response(200, json=simulation_result(4_000))
+        raw = await self.create(node)
+        self.assertEqual(raw.max_gas_amount, 1_000)
+
+    async def test_simulation_runs_with_the_affordable_max_gas(self):
+        node = FakeNode()
+        node.balance = 5_000 * GAS_PRICE
+        await self.create(node)
+        simulated = decode_simulated(node.simulated[0])
+        self.assertEqual(simulated.transaction.max_gas_amount, 5_000)
+
+    async def test_explicit_call_value_makes_no_simulation_or_balance_request(self):
+        node = FakeNode()
+        raw = await self.create(node, max_gas_amount=123_456)
+        self.assertEqual(raw.max_gas_amount, 123_456)
+        self.assertEqual(node.count(*SIMULATE), 0)
+        self.assertEqual(node.count(*VIEW), 0)
+
+    async def test_explicit_config_value_makes_no_simulation_request(self):
+        node = FakeNode()
+        raw = await self.create(node, SupraClientConfig(max_gas_amount=77_000))
+        self.assertEqual(raw.max_gas_amount, 77_000)
+        self.assertEqual(node.count(*SIMULATE), 0)
+
+    async def test_call_value_overrides_config_value(self):
+        node = FakeNode()
+        raw = await self.create(
+            node, SupraClientConfig(max_gas_amount=77_000), max_gas_amount=5
+        )
+        self.assertEqual(raw.max_gas_amount, 5)
+
+    async def test_explicit_value_is_not_capped_by_the_balance(self):
+        node = FakeNode()
+        node.balance = 0
+        raw = await self.create(node, max_gas_amount=500_000)
+        self.assertEqual(raw.max_gas_amount, 500_000)
+
+    async def test_failed_simulation_raises_with_its_status(self):
+        node = FakeNode()
+        result = simulation_result(10, "Fail")
+        result["output"]["Move"]["vm_status"] = "Move abort in 0x1::coin: 0x10006"
+        node.simulation = lambda: httpx.Response(200, json=result)
+        with self.assertRaises(MaxGasEstimationError) as context:
+            await self.create(node)
+        self.assertEqual(context.exception.status, "Fail")
+        self.assertIn("0x10006", context.exception.vm_status)
+        self.assertIn("0x10006", str(context.exception))
+
+    async def test_not_final_simulation_raises(self):
+        node = FakeNode()
+        node.simulation = lambda: httpx.Response(
+            200, json=simulation_result(10, "PendingAfterExecution")
+        )
+        with self.assertRaises(MaxGasEstimationError):
+            await self.create(node)
+
+    async def test_rejected_simulation_request_raises(self):
+        node = FakeNode()
+        node.simulation = lambda: httpx.Response(400, text="bad transaction")
+        with self.assertRaises(MaxGasEstimationError) as context:
+            await self.create(node)
+        self.assertIsInstance(context.exception.__cause__, ApiError)
+
+    async def test_simulation_without_gas_used_raises(self):
+        node = FakeNode()
+        node.simulation = lambda: httpx.Response(
+            200, json={"status": "Success", "output": {"Move": {"vm_status": "ok"}}}
+        )
+        with self.assertRaises(MaxGasEstimationError):
+            await self.create(node)
+
+    async def test_failed_balance_read_raises(self):
+        node = FakeNode()
+        original = node.handler
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/view"):
+                return httpx.Response(500, text="down")
+            return original(request)
+
+        client = SupraClient("http://node.test/")
+        client.api_client._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        )
+        self.addAsyncCleanup(client.close)
+        with self.assertRaises(MaxGasEstimationError):
+            await client.create_raw_transaction(
+                Account.generate(), transfer_payload(), sequence_number=0
+            )
+
+    async def test_balance_too_low_for_one_unit_raises(self):
+        node = FakeNode()
+        node.balance = GAS_PRICE - 1
+        with self.assertRaises(MaxGasEstimationError):
+            await self.create(node)
+        self.assertEqual(node.count(*SIMULATE), 0)
+
+    async def test_address_sender_gets_the_fallback_without_simulation(self):
+        node = FakeNode()
+        node.balance = 100 * 100_000_000
+        client = make_client(node)
+        self.addAsyncCleanup(client.close)
+        address = Account.generate().address()
+        raw = await client.create_raw_transaction(
+            address, transfer_payload(), sequence_number=0
+        )
+        self.assertEqual(raw.max_gas_amount, FALLBACK_MAX_GAS_AMOUNT)
+        self.assertEqual(node.count(*SIMULATE), 0)
+        node.balance = 300 * GAS_PRICE
+        raw = await client.create_raw_transaction(
+            address, transfer_payload(), sequence_number=0
+        )
+        self.assertEqual(raw.max_gas_amount, 300)
+
+    async def test_signed_transaction_keeps_a_valid_signature(self):
+        node = FakeNode()
+        client = make_client(node)
+        self.addAsyncCleanup(client.close)
+        signed = await client.create_signed_transaction(
+            Account.generate(), transfer_payload(), 0
+        )
+        self.assertTrue(signed.verify())
+        self.assertEqual(node.count(*SIMULATE), 1)
+        simulated = decode_simulated(node.simulated[0])
+        self.assertFalse(simulated.verify())
+
+    async def test_fee_payer_balance_pays_and_is_simulated(self):
+        node = FakeNode()
+        client = make_client(node)
+        self.addAsyncCleanup(client.close)
+        sender, fee_payer = Account.generate(), Account.generate()
+        signed = await client.create_fee_payer_transaction(
+            sender, fee_payer, [], transfer_payload()
+        )
+        self.assertEqual(node.view_arguments, [[str(fee_payer.address())]])
+        self.assertEqual(node.count(*SIMULATE), 1)
+        self.assertEqual(
+            signed.transaction.max_gas_amount, MIN_ESTIMATED_MAX_GAS_AMOUNT
+        )
+
+    async def test_multi_agent_transaction_is_simulated(self):
+        node = FakeNode()
+        client = make_client(node)
+        self.addAsyncCleanup(client.close)
+        signed = await client.create_multi_agent_transaction(
+            Account.generate(), [Account.generate()], transfer_payload()
+        )
+        self.assertEqual(node.count(*SIMULATE), 1)
+        self.assertEqual(
+            signed.transaction.max_gas_amount, MIN_ESTIMATED_MAX_GAS_AMOUNT
+        )
 
 
 if __name__ == "__main__":
