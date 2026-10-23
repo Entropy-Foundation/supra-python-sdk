@@ -53,14 +53,29 @@ class ApiClient:
     base_url: str
     api_client_config: ApiClientConfig
 
-    def __init__(self, base_url: str, api_client_config: ApiClientConfig | None = None):
+    def __init__(
+        self,
+        base_url: str,
+        api_client_config: ApiClientConfig | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ):
         """Initializes the API client.
 
         Args:
-            base_url (str): The base URL of the API.
+            base_url (str): The base URL of the API: scheme, host and an optional path prefix. It must not contain a
+                query string or a fragment; pass an access token through `ApiClientConfig` instead.
             api_client_config (ApiClientConfig): Configuration options for API client. Default to None.
+            transport (httpx.AsyncBaseTransport | None): Optional HTTP transport, e.g. `httpx.MockTransport` in tests.
+                Default to None, which uses httpx's default network transport.
+
+        Raises:
+            ValueError: If `base_url` contains a query string or a fragment.
 
         """
+        if "?" in base_url or "#" in base_url:
+            raise ValueError(
+                f"base_url must not contain a query string or a fragment: {base_url!r}"
+            )
         api_client_config = api_client_config or ApiClientConfig()
         self.base_url = base_url if base_url.endswith("/") else base_url + "/"
         limits = httpx.Limits()
@@ -71,6 +86,7 @@ class ApiClient:
             limits=limits,
             timeout=timeout,
             headers=headers,
+            transport=transport,
         )
         self.api_client_config = api_client_config
 

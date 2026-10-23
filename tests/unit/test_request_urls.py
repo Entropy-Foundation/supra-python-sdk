@@ -1,19 +1,24 @@
 # Copyright © Supra
 # SPDX-License-Identifier: Apache-2.0
 
+import pathlib
 import unittest
 from urllib.parse import unquote
 
 import httpx
 
 from supra_sdk.account_address import AccountAddress
+from supra_sdk.clients import ApiClient
+from supra_sdk.clients.rest import rest_types
 from supra_sdk.clients.rest.rest_types import (
     AutomatedTransactionsPagination,
     EventsPagination,
     PaginationWithOrder,
     TransactionType,
+    format_endpoint,
 )
 from supra_sdk.clients.rest.supra_client import SupraClient
+from supra_sdk.metadata import Metadata
 
 ADDRESS = AccountAddress.from_str("0x1")
 HASH = "0x" + "ab" * 32
@@ -23,12 +28,21 @@ COIN_STORE = "0x1::coin::CoinStore<0x1::supra_coin::SupraCoin>"
 class RecordingClient:
     """A `SupraClient` whose HTTP transport records every request and answers with an empty JSON body."""
 
-    def __init__(self, base_url: str):
+    def __init__(self, client: SupraClient):
         self.requests: list[httpx.Request] = []
-        self.client = SupraClient(base_url)
-        self.client.api_client._client = httpx.AsyncClient(
-            transport=httpx.MockTransport(self._handle)
+        self.client = client
+
+    @classmethod
+    async def create(cls, base_url: str) -> "RecordingClient":
+        """Builds a `SupraClient` and swaps its `ApiClient` for one with the same configuration over a mock transport."""
+        client = SupraClient(base_url)
+        config = client.api_client.api_client_config
+        await client.api_client.close()
+        rec = cls(client)
+        client.api_client = ApiClient(
+            base_url, config, transport=httpx.MockTransport(rec._handle)
         )
+        return rec
 
     def _handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -43,12 +57,12 @@ class RecordingClient:
         return self.last.url.raw_path.decode()
 
     async def close(self):
-        await self.client.api_client._client.aclose()
+        await self.client.api_client.close()
 
 
 class BaseUrlTests(unittest.IsolatedAsyncioTestCase):
     async def _request_url(self, base_url: str) -> str:
-        rec = RecordingClient(base_url)
+        rec = await RecordingClient.create(base_url)
         await rec.client.account(ADDRESS)
         await rec.close()
         return str(rec.last.url)
@@ -85,14 +99,38 @@ class BaseUrlTests(unittest.IsolatedAsyncioTestCase):
             "http://localhost:27001/rpc/v3/accounts/0x1",
         )
 
+    async def test_base_url_with_query_or_fragment_is_rejected(self):
+        for base_url in (
+            "https://host/?apikey=k",
+            "https://host?apikey=k",
+            "https://host/p?x=1",
+            "https://host/p#x",
+            "https://host/p#",
+            "https://host/?",
+        ):
+            with self.subTest(base_url=base_url):
+                with self.assertRaises(ValueError):
+                    ApiClient(base_url)
+                with self.assertRaises(ValueError):
+                    SupraClient(base_url)
+
+    async def test_requests_use_the_real_client_configuration(self):
+        rec = await RecordingClient.create("https://node.example")
+        await rec.client.account(ADDRESS)
+        client = rec.client.api_client._client
+        await rec.close()
+        self.assertIn(Metadata.SUPRA_HEADER, rec.last.headers)
+        self.assertEqual(client.timeout.read, 60.0)
+        self.assertIsNone(client.timeout.pool)
+
     async def test_post_keeps_path_prefix(self):
-        rec = RecordingClient("https://proxy.example/supra")
+        rec = await RecordingClient.create("https://proxy.example/supra")
         await rec.client.view("0x1::coin::name", [], [])
         await rec.close()
         self.assertEqual(str(rec.last.url), "https://proxy.example/supra/rpc/v3/view")
 
     async def test_faucet_keeps_path_prefix(self):
-        rec = RecordingClient("https://proxy.example/supra")
+        rec = await RecordingClient.create("https://proxy.example/supra")
         await rec.client.faucet_transaction_by_hash(HASH)
         await rec.close()
         self.assertEqual(
@@ -103,8 +141,9 @@ class BaseUrlTests(unittest.IsolatedAsyncioTestCase):
 
 class PathValueTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.rec = RecordingClient("https://node.example/prefix")
+        self.rec = await RecordingClient.create("https://node.example/prefix")
         self.client = self.rec.client
+        self.client.api_client.api_client_config.access_token = "token"
 
     async def asyncTearDown(self):
         await self.rec.close()
@@ -165,8 +204,20 @@ class PathValueTests(unittest.IsolatedAsyncioTestCase):
             await self.client.events_by_type("")
         self.assertEqual(self.rec.requests, [])
 
-    async def test_hashes_must_be_hex(self):
-        bad = ("0x1/../2", "abc?x=1", "abc#frag", "not-hex", "", "0x")
+    async def test_hashes_must_be_64_hex_digits(self):
+        bad = (
+            "0x1/../2",
+            "abc?x=1",
+            "abc#frag",
+            "not-hex",
+            "",
+            "0x",
+            "0x12",
+            "0x" + "ab" * 31,
+            "0x" + "ab" * 33,
+            "0x" + "zz" * 32,
+            "0x" + "ab" * 31 + "a/",
+        )
         for value in bad:
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
@@ -180,6 +231,9 @@ class PathValueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.rec.requests, [])
 
     async def test_valid_hashes(self):
+        bare = "AB" * 32
+        await self.client.transaction_by_hash(bare)
+        self.assertEqual(self.rec.last_target, f"/prefix/rpc/v3/transactions/{bare}")
         await self.client.transaction_by_hash(HASH)
         self.assertEqual(self.rec.last_target, f"/prefix/rpc/v3/transactions/{HASH}")
         await self.client.block_by_hash(HASH)
@@ -189,23 +243,38 @@ class PathValueTests(unittest.IsolatedAsyncioTestCase):
             self.rec.last_target, f"/prefix/rpc/v3/block/{HASH}/transactions"
         )
 
-    async def test_heights_and_epochs_must_be_non_negative_integers(self):
-        for value in (-1, "1/2", "1", 1.5, True, None):
-            with self.subTest(value=value), self.assertRaises(ValueError):
-                await self.client.block_by_height(value)  # type: ignore[arg-type]
+    async def test_heights_and_epochs_reject_invalid_values(self):
+        bad = (-1, "-1", "1/2", "", " 1", "1 ", "1.5", "0x10", "١٢", 1.5, True, None)
+        for value in bad:
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    await self.client.block_by_height(value)  # type: ignore[arg-type]
+                with self.assertRaises(ValueError):
+                    await self.client.committee_authorization(value)  # type: ignore[arg-type]
         self.assertEqual(self.rec.requests, [])
-        await self.client.block_by_height(0)
+
+    async def test_heights_accept_integers_and_decimal_strings(self):
+        for value, expected in ((0, "0"), (7, "7"), ("7", "7"), ("007", "7")):
+            with self.subTest(value=value):
+                await self.client.block_by_height(value)
+                self.assertEqual(
+                    self.rec.last.url.path, f"/prefix/rpc/v3/block/height/{expected}"
+                )
+
+    async def test_epoch_accepts_decimal_string(self):
+        await self.client.committee_authorization("12")
         self.assertEqual(
-            self.rec.last_target.split("?")[0], "/prefix/rpc/v3/block/height/0"
+            self.rec.last_target,
+            "/prefix/rpc/v3/consensus/committee_authorization/12",
         )
 
     async def test_addresses_are_validated(self):
         for value in ("0x1/../2", "0x1?x=1", "0x1#a", "zz", "", "0x" + "1" * 65):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
-                    await self.client.account(value)  # type: ignore[arg-type]
+                    await self.client.account(value)
                 with self.assertRaises(ValueError):
-                    await self.client.faucet(value)  # type: ignore[arg-type]
+                    await self.client.faucet(value)
                 with self.assertRaises(ValueError):
                     await self.client.get_table_item(value, "u64", "u64", "1")
         self.assertEqual(self.rec.requests, [])
@@ -220,9 +289,65 @@ class PathValueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.rec.last_target, f"/prefix/rpc/v3/tables/{handle}/item")
 
 
+class FormatEndpointTests(unittest.TestCase):
+    def test_unknown_placeholder_is_encoded_as_one_segment(self):
+        self.assertEqual(
+            format_endpoint("rpc/v3/things/{thing_name}", thing_name="a/b?c#d<e>"),
+            "rpc/v3/things/a%2Fb%3Fc%23d%3Ce%3E",
+        )
+
+    def test_unknown_placeholder_rejects_empty_and_non_strings(self):
+        for value in ("", None, 5):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                format_endpoint("rpc/v3/things/{thing_name}", thing_name=value)
+
+    def test_placeholders_are_validated_by_name(self):
+        template = "x/{address}/{table_handle}/{account_address}"
+        for name in ("address", "table_handle", "account_address"):
+            with self.subTest(name=name):
+                values = {
+                    "address": "0x1",
+                    "table_handle": "0x2",
+                    "account_address": "0x3",
+                }
+                values[name] = "0x1/../2"
+                with self.assertRaises(ValueError):
+                    format_endpoint(template, **values)
+        for name in ("hash", "block_hash", "tx_hash"):
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError):
+                    format_endpoint("x/{" + name + "}", **{name: "0x12"})
+                self.assertEqual(
+                    format_endpoint("x/{" + name + "}", **{name: HASH}), f"x/{HASH}"
+                )
+        for name in ("height", "epoch"):
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError):
+                    format_endpoint("x/{" + name + "}", **{name: "a"})
+                self.assertEqual(
+                    format_endpoint("x/{" + name + "}", **{name: "5"}), "x/5"
+                )
+
+    def test_addresses_are_canonicalised(self):
+        self.assertEqual(format_endpoint("x/{address}", address="0x01"), "x/0x1")
+        self.assertEqual(format_endpoint("x/{address}", address=ADDRESS), "x/0x1")
+
+    def test_values_must_match_placeholders(self):
+        with self.assertRaises(ValueError):
+            format_endpoint("x/{address}")
+        with self.assertRaises(ValueError):
+            format_endpoint("x/{address}", address="0x1", extra="y")
+
+    def test_every_endpoint_with_placeholders_is_built_by_format_endpoint(self):
+        rest_dir = pathlib.Path(rest_types.__file__).parent
+        for path in rest_dir.glob("*.py"):
+            with self.subTest(module=path.name):
+                self.assertNotRegex(path.read_text(), r"_ENDPOINT\.format\(")
+
+
 class QueryParameterTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.rec = RecordingClient("https://node.example")
+        self.rec = await RecordingClient.create("https://node.example")
         self.client = self.rec.client
 
     async def asyncTearDown(self):

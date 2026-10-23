@@ -17,8 +17,7 @@ from supra_sdk.clients.rest.rest_types import (
     AutomatedTransactionsPagination,
     Pagination,
     PaginationWithOrder,
-    address_segment,
-    encode_path_segment,
+    format_endpoint,
 )
 
 
@@ -32,52 +31,51 @@ class AccountRestClient(RestClient):
 
     async def account(
         self,
-        account_address: AccountAddress,
+        account_address: AccountAddress | str,
     ) -> dict[str, str]:
         """Provides the authentication key and the sequence number of the given account.
 
         Args:
-            account_address (AccountAddress): Address of the account.
+            account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.
 
         Returns:
             dict[str, str]: The authentication key and sequence number of the given account.
 
         """
-        endpoint = ACCOUNT_ENDPOINT.format(
-            account_address=address_segment(account_address, "account_address")
-        )
+        endpoint = format_endpoint(ACCOUNT_ENDPOINT, account_address=account_address)
         return (await self.api_client.get(endpoint=endpoint)).json()
 
     async def account_resource(
         self,
-        account_address: AccountAddress,
+        account_address: AccountAddress | str,
         resource_type: str,
     ) -> dict[str, Any]:
         """Retrieves an individual resource from a given account.
 
         Args:
-            account_address (AccountAddress): Address of the account.
+            account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.
             resource_type (str): Type of the resource e.g. '0x1::account::Account'.
 
         Returns:
             dict[str, Any]: An individual resource from a given account.
 
         """
-        endpoint = ACCOUNT_RESOURCE_ENDPOINT.format(
-            account_address=address_segment(account_address, "account_address"),
-            resource_type=encode_path_segment(resource_type, "resource_type"),
+        endpoint = format_endpoint(
+            ACCOUNT_RESOURCE_ENDPOINT,
+            account_address=account_address,
+            resource_type=resource_type,
         )
         return (await self.api_client.get(endpoint=endpoint)).json()
 
     async def account_resources(
         self,
-        account_address: AccountAddress,
+        account_address: AccountAddress | str,
         pagination: Pagination | None = None,
     ) -> tuple[list[dict[str, Any]], str]:
         """Retrieves all account resources for a given account.
 
         Args:
-            account_address (AccountAddress): Address of the account.
+            account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.
             pagination (Pagination | None): Pagination options. Default to None.
 
         Returns:
@@ -86,8 +84,8 @@ class AccountRestClient(RestClient):
                 - str: Cursor to retrieve the next page.
 
         """
-        endpoint = ACCOUNT_RESOURCES_ENDPOINT.format(
-            account_address=address_segment(account_address, "account_address")
+        endpoint = format_endpoint(
+            ACCOUNT_RESOURCES_ENDPOINT, account_address=account_address
         )
         params = pagination.to_params() if pagination else {}
         response = await self.api_client.get(endpoint=endpoint, params=params)
@@ -95,34 +93,35 @@ class AccountRestClient(RestClient):
 
     async def account_module(
         self,
-        account_address: AccountAddress,
+        account_address: AccountAddress | str,
         module_name: str,
     ) -> dict[str, Any]:
         """Retrieves an individual module from a given account.
 
         Args:
-            account_address (AccountAddress): Address of the account.
+            account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.
             module_name (str): Name of the module to retrieve e.g. 'account'
 
         Returns:
             dict[str, Any]: An individual module from a given account.
 
         """
-        endpoint = ACCOUNT_MODULE_ENDPOINT.format(
-            account_address=address_segment(account_address, "account_address"),
-            module_name=encode_path_segment(module_name, "module_name"),
+        endpoint = format_endpoint(
+            ACCOUNT_MODULE_ENDPOINT,
+            account_address=account_address,
+            module_name=module_name,
         )
         return (await self.api_client.get(endpoint=endpoint)).json()
 
     async def account_modules(
         self,
-        account_address: AccountAddress,
+        account_address: AccountAddress | str,
         pagination: Pagination | None = None,
     ) -> tuple[list[dict[str, Any]], str]:
         """Retrieves all account modules from a given account.
 
         Args:
-            account_address (AccountAddress): Address of the account.
+            account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.
             pagination (Pagination | None): Pagination options. Default to None.
 
         Returns:
@@ -131,8 +130,8 @@ class AccountRestClient(RestClient):
                 - str: Cursor to retrieve the next page.
 
         """
-        endpoint = ACCOUNT_MODULES_ENDPOINT.format(
-            account_address=address_segment(account_address, "account_address")
+        endpoint = format_endpoint(
+            ACCOUNT_MODULES_ENDPOINT, account_address=account_address
         )
         params = pagination.to_params() if pagination else {}
         response = await self.api_client.get(endpoint=endpoint, params=params)
@@ -140,13 +139,13 @@ class AccountRestClient(RestClient):
 
     async def account_transactions(
         self,
-        account_address: AccountAddress,
+        account_address: AccountAddress | str,
         pagination: PaginationWithOrder | None = None,
     ) -> list[dict[str, Any]]:
         """Retrieves details of finalized transactions sent by a given account.
 
         Args:
-            account_address (AccountAddress): Address of the account.
+            account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.
             pagination (PaginationWithOrder | None): Pagination options. Default to None.
                 Note: Sequence number would be used as start in pagination option.
 
@@ -154,21 +153,21 @@ class AccountRestClient(RestClient):
             list[dict[str, Any]]: Details of finalized transactions sent by a given account.
 
         """
-        endpoint = ACCOUNT_TRANSACTIONS_ENDPOINT.format(
-            account_address=address_segment(account_address, "account_address")
+        endpoint = format_endpoint(
+            ACCOUNT_TRANSACTIONS_ENDPOINT, account_address=account_address
         )
         params = pagination.to_params() if pagination else {}
         return (await self.api_client.get(endpoint=endpoint, params=params)).json()
 
     async def account_coin_transactions(
         self,
-        account_address: AccountAddress,
+        account_address: AccountAddress | str,
         pagination: PaginationWithOrder | None = None,
     ) -> tuple[list[dict[str, Any]], str]:
         """Retrieves details of finalized coin deposit/withdraw type transactions associated with a given account.
 
         Args:
-            account_address (AccountAddress): Address of the account.
+            account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.
             pagination (PaginationWithOrder | None): Pagination options. Default to None.
 
         Returns:
@@ -178,8 +177,8 @@ class AccountRestClient(RestClient):
                 - str: Cursor to retrieve the next page.
 
         """
-        endpoint = ACCOUNT_COIN_TRANSACTIONS_ENDPOINT.format(
-            account_address=address_segment(account_address, "account_address")
+        endpoint = format_endpoint(
+            ACCOUNT_COIN_TRANSACTIONS_ENDPOINT, account_address=account_address
         )
         params = pagination.to_params() if pagination else {}
         response = await self.api_client.get(endpoint=endpoint, params=params)
@@ -187,14 +186,14 @@ class AccountRestClient(RestClient):
 
     async def account_automated_transactions(
         self,
-        account_address: AccountAddress,
+        account_address: AccountAddress | str,
         pagination: AutomatedTransactionsPagination | None = None,
     ) -> tuple[list[dict[str, Any]], str]:
         """Retrieves details of finalized automated transactions based on the automation tasks registered by a given
             account.
 
         Args:
-            account_address (AccountAddress): Address of the account.
+            account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.
             pagination (AutomatedTransactionsPagination | None): Pagination options. Default to None.
 
         Returns:
@@ -204,8 +203,8 @@ class AccountRestClient(RestClient):
                 - str: Cursor to retrieve the next page.
 
         """
-        endpoint = ACCOUNT_AUTOMATED_TRANSACTIONS_ENDPOINT.format(
-            account_address=address_segment(account_address, "account_address")
+        endpoint = format_endpoint(
+            ACCOUNT_AUTOMATED_TRANSACTIONS_ENDPOINT, account_address=account_address
         )
         params = pagination.to_params() if pagination else {}
         response = await self.api_client.get(endpoint=endpoint, params=params)

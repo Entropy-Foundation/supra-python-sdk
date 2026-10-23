@@ -3,6 +3,7 @@
 
 from typing import Any
 
+from supra_sdk.account_address import AccountAddress
 from supra_sdk.clients.rest.rest_client import RestClient
 from supra_sdk.clients.rest.rest_types import (
     CHAIN_ID_ENDPOINT,
@@ -10,8 +11,7 @@ from supra_sdk.clients.rest.rest_types import (
     TABLE_ITEMS_ENDPOINT,
     VIEW_FUNCTION_ENDPOINT,
     EventsPagination,
-    address_segment,
-    encode_path_segment,
+    format_endpoint,
 )
 
 
@@ -62,7 +62,7 @@ class GeneralRestClient(RestClient):
 
     async def get_table_item(
         self,
-        table_handle: str,
+        table_handle: AccountAddress | str,
         key_type: str,
         value_type: str,
         key: Any,
@@ -70,7 +70,8 @@ class GeneralRestClient(RestClient):
         """Retrieves an item from a table by key.
 
         Args:
-            table_handle (str): Table handle to lookup. Should be retrieved using account resources API.
+            table_handle (AccountAddress | str): Table handle to lookup, as an `AccountAddress` or a hex string.
+                Should be retrieved using account resources API.
             key_type (str): The type of the table key.
             value_type (str): The type of the table value.
             key (str): The key to fetch from the table.
@@ -79,9 +80,7 @@ class GeneralRestClient(RestClient):
             dict[str, Any]: Item associated with the key in the table.
 
         """
-        endpoint = TABLE_ITEMS_ENDPOINT.format(
-            table_handle=address_segment(table_handle, "table_handle")
-        )
+        endpoint = format_endpoint(TABLE_ITEMS_ENDPOINT, table_handle=table_handle)
         data = {
             "key_type": key_type,
             "value_type": value_type,
@@ -104,9 +103,7 @@ class GeneralRestClient(RestClient):
                 - str: Cursor to retrieve the next page.
 
         """
-        endpoint = EVENTS_BY_TYPE_ENDPOINT.format(
-            event_type=encode_path_segment(event_type, "event_type")
-        )
+        endpoint = format_endpoint(EVENTS_BY_TYPE_ENDPOINT, event_type=event_type)
         params = pagination.to_params() if pagination else {}
         response = await self.api_client.get(endpoint=endpoint, params=params)
         return response.json()["data"], response.headers.get("x-supra-cursor", "")
