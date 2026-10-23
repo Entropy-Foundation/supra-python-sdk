@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 from supra_sdk import asymmetric_crypto, ed25519
 from supra_sdk.account_address import AccountAddress
@@ -55,12 +56,28 @@ class Account:
         )
 
     def store(self, path: str):
+        """Writes the address and the private key to `path` as JSON.
+
+        The private key is stored unencrypted. The file is created readable and
+        writable only by its owner (mode 0600); an existing file at `path` is
+        truncated and its permissions are tightened to 0600 as well. On Windows
+        the mode is not applied and the file inherits the directory's access
+        control. Read the file back with `Account.load`.
+        """
         data = {
             "account_address": str(self.account_address),
-            "private_key": str(self.private_key),
+            "private_key": self.private_key.hex(),
         }
-        with open(path, "w") as file:
-            json.dump(data, file)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w") as file:
+                fd = -1
+                json.dump(data, file)
+        finally:
+            if fd != -1:
+                os.close(fd)
 
     def address(self) -> AccountAddress:
         """Returns the address associated with the given account"""
