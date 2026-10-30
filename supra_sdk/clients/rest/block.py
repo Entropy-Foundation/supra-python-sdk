@@ -1,6 +1,7 @@
 # Copyright © Supra
 # SPDX-License-Identifier: Apache-2.0
 
+import warnings
 from typing import Any
 
 from supra_sdk.clients.rest.rest_client import RestClient
@@ -48,26 +49,40 @@ class BlockRestClient(RestClient):
         self,
         height: int | str,
         transaction_type: TransactionType | None = None,
-        with_finalized_transaction: bool = False,
+        with_finalized_transactions: bool = False,
+        *,
+        with_finalized_transaction: bool | None = None,
     ) -> dict[str, Any]:
         """Retrieves information about the block that has been finalized at the given height.
 
         Args:
             height (int | str): The height of the block, as a non-negative integer or a string of decimal digits.
             transaction_type (TransactionType | None): Transaction type to query. If missing any/all type of
-                transactions will be looked for. Default to None.
-            with_finalized_transaction (bool): Whether to include finalized transactions or not. Default to False.
+                transactions will be looked for. The node applies it only together with
+                `with_finalized_transactions`. Default to None.
+            with_finalized_transactions (bool): Whether to include finalized transactions or not. Default to False.
+            with_finalized_transaction (bool | None): Deprecated spelling of `with_finalized_transactions`; it is
+                still accepted and emits a `DeprecationWarning`. Default to None.
 
         Returns:
             dict[str, Any]: Information about the block that has been finalized at the given height.
 
         """
+        if with_finalized_transaction is not None:
+            warnings.warn(
+                "with_finalized_transaction is deprecated, use with_finalized_transactions",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            with_finalized_transactions = (
+                with_finalized_transactions or with_finalized_transaction
+            )
         endpoint = format_endpoint(BLOCK_BY_HEIGHT_ENDPOINT, height=height)
         params: dict[str, str | bool] = {
-            "with_finalized_transactions": with_finalized_transaction
+            "with_finalized_transactions": with_finalized_transactions
         }
         if transaction_type:
-            params["transaction_type"] = transaction_type.value
+            params["type"] = transaction_type.value
         return (await self.api_client.get(endpoint=endpoint, params=params)).json()
 
     async def txs_by_block(
@@ -86,7 +101,5 @@ class BlockRestClient(RestClient):
 
         """
         endpoint = format_endpoint(BLOCK_TRANSACTIONS_ENDPOINT, block_hash=block_hash)
-        params = (
-            {"transaction_type": transaction_type.value} if transaction_type else {}
-        )
+        params = {"type": transaction_type.value} if transaction_type else {}
         return (await self.api_client.get(endpoint=endpoint, params=params)).json()

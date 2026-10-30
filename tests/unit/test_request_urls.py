@@ -13,6 +13,7 @@ from supra_sdk.clients.rest import rest_types
 from supra_sdk.clients.rest.rest_types import (
     AutomatedTransactionsPagination,
     EventsPagination,
+    Pagination,
     PaginationWithOrder,
     TransactionType,
     format_endpoint,
@@ -386,13 +387,76 @@ class QueryParameterTests(unittest.IsolatedAsyncioTestCase):
             {"ascending": "false", "block_height": "7", "count": "2"},
         )
 
+    async def test_automated_transactions_cursor_is_sent(self):
+        await self.client.account_automated_transactions(
+            ADDRESS, AutomatedTransactionsPagination(count=2, cursor="c 1&2")
+        )
+        self.assertEqual(
+            dict(self.rec.last.url.params), {"count": "2", "cursor": "c 1&2"}
+        )
+
     async def test_block_query_parameters(self):
         await self.client.block_by_height(
-            3, transaction_type=TransactionType.USER, with_finalized_transaction=True
+            3, transaction_type=TransactionType.USER, with_finalized_transactions=True
         )
         self.assertEqual(
             dict(self.rec.last.url.params),
-            {"with_finalized_transactions": "true", "transaction_type": "user"},
+            {"with_finalized_transactions": "true", "type": "user"},
+        )
+
+    async def test_block_by_height_positional_flag_is_the_plural_parameter(self):
+        await self.client.block_by_height(3, TransactionType.META, True)
+        self.assertEqual(
+            dict(self.rec.last.url.params),
+            {"with_finalized_transactions": "true", "type": "meta"},
+        )
+
+    async def test_block_by_height_deprecated_keyword_still_works(self):
+        with self.assertWarns(DeprecationWarning):
+            await self.client.block_by_height(3, with_finalized_transaction=True)
+        self.assertEqual(
+            dict(self.rec.last.url.params), {"with_finalized_transactions": "true"}
+        )
+
+    async def test_block_by_height_without_transactions_by_default(self):
+        await self.client.block_by_height(3)
+        self.assertEqual(
+            dict(self.rec.last.url.params), {"with_finalized_transactions": "false"}
+        )
+
+    async def test_txs_by_block_sends_type(self):
+        await self.client.txs_by_block(HASH, TransactionType.AUTO)
+        self.assertEqual(dict(self.rec.last.url.params), {"type": "auto"})
+        await self.client.txs_by_block(HASH)
+        self.assertEqual(self.rec.last.url.query, b"")
+
+    async def test_consensus_block_by_height_path(self):
+        self.client.api_client.api_client_config.access_token = "token"
+        await self.client.consensus_block_by_height(12, with_batches=True)
+        self.assertEqual(self.rec.last.url.path, "/rpc/v3/consensus/block/height/12")
+        self.assertEqual(dict(self.rec.last.url.params), {"with_batches": "true"})
+
+    async def test_empty_cursors_are_never_sent(self):
+        await self.client.account_resources(ADDRESS, Pagination(count=3, start=""))
+        self.assertEqual(dict(self.rec.last.url.params), {"count": "3"})
+        await self.client.account_coin_transactions(
+            ADDRESS, PaginationWithOrder(start="")
+        )
+        self.assertEqual(self.rec.last.url.query, b"")
+        await self.client.events_by_type(
+            "0x1::coin::CoinDeposit", EventsPagination(start="")
+        )
+        self.assertEqual(self.rec.last.url.query, b"")
+        await self.client.account_automated_transactions(
+            ADDRESS, AutomatedTransactionsPagination(cursor="")
+        )
+        self.assertEqual(self.rec.last.url.query, b"")
+
+    async def test_zero_start_is_kept(self):
+        await self.client.account_transactions(ADDRESS, PaginationWithOrder(start=0))
+        self.assertEqual(dict(self.rec.last.url.params), {"start": "0"})
+        self.assertEqual(
+            EventsPagination(start_height=0).to_params(), {"start_height": 0}
         )
 
     async def test_none_parameters_are_dropped(self):

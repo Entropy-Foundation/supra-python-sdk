@@ -1,9 +1,12 @@
 # Copyright © Supra
 # SPDX-License-Identifier: Apache-2.0
 
+from collections.abc import AsyncIterator
+from dataclasses import replace
 from typing import Any
 
 from supra_sdk.account_address import AccountAddress
+from supra_sdk.clients.rest.paging import next_cursor, paginate
 from supra_sdk.clients.rest.rest_client import RestClient
 from supra_sdk.clients.rest.rest_types import (
     CHAIN_ID_ENDPOINT,
@@ -90,7 +93,7 @@ class GeneralRestClient(RestClient):
 
     async def events_by_type(
         self, event_type: str, pagination: EventsPagination | None = None
-    ) -> tuple[list[dict[str, Any]], str]:
+    ) -> tuple[list[dict[str, Any]], str | None]:
         """Retrieves events of a given type.
 
         Args:
@@ -98,12 +101,36 @@ class GeneralRestClient(RestClient):
             pagination (EventsPagination | None): Pagination options. Default to None.
 
         Returns:
-            tuple[list[dict[str, Any]], str]: A tuple containing,
+            tuple[list[dict[str, Any]], str | None]: A tuple containing,
                 - list[dict[str, Any]]: List of events.
-                - str: Cursor to retrieve the next page.
+                - str | None: Cursor to retrieve the next page, or `None` when the feed has ended.
 
         """
         endpoint = format_endpoint(EVENTS_BY_TYPE_ENDPOINT, event_type=event_type)
         params = pagination.to_params() if pagination else {}
         response = await self.api_client.get(endpoint=endpoint, params=params)
-        return response.json()["data"], response.headers.get("x-supra-cursor", "")
+        events = response.json()["data"]
+        return events, next_cursor(response, events)
+
+    def iter_events_by_type(
+        self, event_type: str, pagination: EventsPagination | None = None
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Iterates over all events of a given type, requesting further pages until the feed ends.
+
+        The iteration stops at the first empty page or the first response without a cursor.
+
+        Args:
+            event_type (str): The fully qualified name of the event struct e.g. '0x1::coin::CoinDeposit'.
+            pagination (EventsPagination | None): Pagination options of the first request; `limit` sets the page
+                size, `start` the cursor to begin from, and `start_height` and `end_height` the block range.
+                Default to None.
+
+        Returns:
+            AsyncIterator[dict[str, Any]]: The events, in the order the node returns them.
+
+        """
+        return paginate(
+            lambda p: self.events_by_type(event_type, p),
+            pagination or EventsPagination(),
+            lambda p, cursor: replace(p, start=cursor),
+        )
