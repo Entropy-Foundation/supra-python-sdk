@@ -355,16 +355,22 @@ class SupraTokenObjectClient:
         self.client = client
 
     async def read_object(self, address: AccountAddress) -> ReadObject:
-        all_resources = []
-        resources, cursor = None, None
-        while not resources or len(resources) == self.PAGINATION_COUNT:
-            resources, cursor = await self.client.account_resources(
-                address, Pagination(count=self.PAGINATION_COUNT, start=cursor)
-            )
-            all_resources.extend(resources)
+        """Reads the object resources this class knows how to parse from the given address.
 
+        Follows the node's cursor until the feed ends, which is at the first empty page or the first response without
+        a cursor, so an address with no resources takes one request.
+
+        Args:
+            address (AccountAddress): Address of the object.
+
+        Returns:
+            ReadObject: The parsed resources, keyed by resource class.
+
+        """
         object_resources = {}
-        for resource in all_resources:
+        async for resource in self.client.iter_account_resources(
+            address, Pagination(count=self.PAGINATION_COUNT)
+        ):
             if resource["type"] in ReadObject.resource_map:
                 resource_obj = ReadObject.resource_map[resource["type"]]
                 object_resources[resource_obj] = resource_obj.parse(resource["data"])
