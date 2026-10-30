@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import enum
 import hashlib
 from collections.abc import Callable
 from typing import Any, Protocol, cast
@@ -21,7 +22,13 @@ from supra_sdk.authenticator import (
     SingleKeyAuthenticator,
     SingleSenderAuthenticator,
 )
-from supra_sdk.bcs import Deserializable, Deserializer, Serializable, Serializer
+from supra_sdk.bcs import (
+    MAX_U64,
+    Deserializable,
+    Deserializer,
+    Serializable,
+    Serializer,
+)
 from supra_sdk.type_tag import TypeTag
 
 
@@ -316,7 +323,7 @@ class ScriptArgument:
     value: Any
 
     def __init__(self, variant: int, value: Any):
-        if variant < 0 or variant > 5:
+        if variant < ScriptArgument.U8 or variant > ScriptArgument.U256:
             raise Exception("Invalid variant")
 
         self.variant = variant
@@ -498,8 +505,25 @@ class MultisigTransactionPayload:
         self.transaction_payload.serialize(serializer)
 
 
+class AutomationTaskType(enum.Enum):
+    """The type of an automation task.
+
+    The value of a member is its index in the node's task type enum, which is what
+    is written to BCS. It is not the numeric value the node uses elsewhere for the
+    type.
+
+    ``SYSTEM`` tasks can only be registered by accounts that the registry has
+    authorised for system tasks; registration from any other account aborts.
+    System tasks are not charged, so their gas price cap and fee cap are not used.
+    """
+
+    USER = 0
+    SYSTEM = 1
+
+
 class AutomationRegistrationParams:
     V1: int = 0
+    V2: int = 1
 
     variant: int
     registration_params: Any
@@ -507,15 +531,65 @@ class AutomationRegistrationParams:
     def __init__(self, registration_params: Any):
         if isinstance(registration_params, AutomationRegistrationParamsV1):
             self.variant = AutomationRegistrationParams.V1
+        elif isinstance(registration_params, AutomationRegistrationParamsV2):
+            self.variant = AutomationRegistrationParams.V2
         else:
             raise Exception("Invalid automation registration params type")
         self.registration_params = registration_params
+
+    @staticmethod
+    def build(
+        automated_function: EntryFunction,
+        max_gas_amount: int,
+        gas_price_cap: int,
+        automation_fee_cap_for_epoch: int,
+        expiration_timestamp_secs: int,
+        aux_data: list[bytes],
+        task_type: AutomationTaskType | None = None,
+        priority: int | None = None,
+    ) -> AutomationRegistrationParams:
+        """Builds registration parameters, choosing the version from the arguments.
+
+        With neither ``task_type`` nor ``priority`` the result is version 1. With
+        either, it is version 2; a missing ``task_type`` is then
+        ``AutomationTaskType.USER``.
+
+        Without a priority, the registry uses the task's index as its priority.
+        """
+        if task_type is None and priority is None:
+            return AutomationRegistrationParams(
+                AutomationRegistrationParamsV1(
+                    automated_function,
+                    max_gas_amount,
+                    gas_price_cap,
+                    automation_fee_cap_for_epoch,
+                    expiration_timestamp_secs,
+                    aux_data,
+                )
+            )
+        return AutomationRegistrationParams(
+            AutomationRegistrationParamsV2(
+                automated_function,
+                max_gas_amount,
+                gas_price_cap,
+                automation_fee_cap_for_epoch,
+                expiration_timestamp_secs,
+                aux_data,
+                AutomationTaskType.USER if task_type is None else task_type,
+                priority,
+            )
+        )
 
     @staticmethod
     def deserialize(deserializer: Deserializer) -> AutomationRegistrationParams:
         variant = deserializer.uleb128()
         if variant == AutomationRegistrationParams.V1:
             registration_params = AutomationRegistrationParamsV1.deserialize(
+                deserializer
+            )
+            return AutomationRegistrationParams(registration_params)
+        elif variant == AutomationRegistrationParams.V2:
+            registration_params = AutomationRegistrationParamsV2.deserialize(
                 deserializer
             )
             return AutomationRegistrationParams(registration_params)
@@ -568,6 +642,80 @@ class AutomationRegistrationParamsV1:
         serializer.u64(self.automation_fee_cap_for_epoch)
         serializer.u64(self.expiration_timestamp_secs)
         serializer.sequence(self.aux_data, Serializer.to_bytes)
+
+
+class AutomationRegistrationParamsV2:
+    """Version 2 of the automation registration parameters.
+
+    The version 1 fields, followed by the task type and an optional priority.
+    Without a priority (``None``), the registry uses the task's index as its
+    priority.
+    """
+
+    def __init__(
+        self,
+        automated_function: EntryFunction,
+        max_gas_amount: int,
+        gas_price_cap: int,
+        automation_fee_cap_for_epoch: int,
+        expiration_timestamp_secs: int,
+        aux_data: list[bytes],
+        task_type: AutomationTaskType = AutomationTaskType.USER,
+        priority: int | None = None,
+    ):
+        if not isinstance(task_type, AutomationTaskType):
+            raise TypeError("task_type must be an AutomationTaskType")
+        if priority is not None and not 0 <= priority <= MAX_U64:
+            raise ValueError("priority must be from 0 to 2^64 - 1")
+        self.automated_function = automated_function
+        self.max_gas_amount = max_gas_amount
+        self.gas_price_cap = gas_price_cap
+        self.automation_fee_cap_for_epoch = automation_fee_cap_for_epoch
+        self.expiration_timestamp_secs = expiration_timestamp_secs
+        self.aux_data = aux_data
+        self.task_type = task_type
+        self.priority = priority
+
+    @staticmethod
+    def deserialize(deserializer: Deserializer) -> AutomationRegistrationParamsV2:
+        automated_function = EntryFunction.deserialize(deserializer)
+        max_gas_amount = deserializer.u64()
+        gas_price_cap = deserializer.u64()
+        automation_fee_cap_for_epoch = deserializer.u64()
+        expiration_timestamp_secs = deserializer.u64()
+        aux_data = deserializer.sequence(Deserializer.to_bytes)
+        task_type_index = deserializer.uleb128()
+        try:
+            task_type = AutomationTaskType(task_type_index)
+        except ValueError:
+            raise Exception(
+                f"Invalid automation task type: {task_type_index}"
+            ) from None
+        priority = deserializer.u64() if deserializer.bool() else None
+        return AutomationRegistrationParamsV2(
+            automated_function,
+            max_gas_amount,
+            gas_price_cap,
+            automation_fee_cap_for_epoch,
+            expiration_timestamp_secs,
+            aux_data,
+            task_type,
+            priority,
+        )
+
+    def serialize(self, serializer: Serializer) -> None:
+        self.automated_function.serialize(serializer)
+        serializer.u64(self.max_gas_amount)
+        serializer.u64(self.gas_price_cap)
+        serializer.u64(self.automation_fee_cap_for_epoch)
+        serializer.u64(self.expiration_timestamp_secs)
+        serializer.sequence(self.aux_data, Serializer.to_bytes)
+        serializer.uleb128(self.task_type.value)
+        if self.priority is None:
+            serializer.bool(False)
+        else:
+            serializer.bool(True)
+            serializer.u64(self.priority)
 
 
 class ModuleId:
@@ -633,7 +781,7 @@ class SignedTransaction:
         if isinstance(authenticator, AccountAuthenticator):
             if (
                 authenticator.variant == AccountAuthenticator.ED25519
-                or authenticator == AccountAuthenticator.MULTI_ED25519
+                or authenticator.variant == AccountAuthenticator.MULTI_ED25519
             ):
                 authenticator = Authenticator(authenticator.authenticator)
             else:

@@ -4,7 +4,9 @@
 import asyncio
 import copy
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from http import HTTPStatus
 from typing import Any
 
 from supra_sdk.account import Account
@@ -16,15 +18,25 @@ from supra_sdk.authenticator import (
 )
 from supra_sdk.bcs import Serializer
 from supra_sdk.clients import ApiClient, ApiClientConfig
+from supra_sdk.clients.api_client import ApiError
 from supra_sdk.clients.rest.account import AccountRestClient
 from supra_sdk.clients.rest.block import BlockRestClient
 from supra_sdk.clients.rest.consensus import ConsensusRestClient
 from supra_sdk.clients.rest.faucet import FaucetRestClient
 from supra_sdk.clients.rest.general import GeneralRestClient
 from supra_sdk.clients.rest.transaction import TransactionRestClient
+from supra_sdk.clients.rest.transaction_defaults import (
+    DEFAULT_MAX_TRANSACTION_TTL_SECONDS,
+    FALLBACK_MAX_GAS_AMOUNT,
+    MaxGasEstimationError,
+    affordable_gas_amount,
+    default_expiration_timestamp,
+    is_sequence_number_too_new,
+    max_gas_from_simulation,
+)
 from supra_sdk.transactions import (
     AutomationRegistrationParams,
-    AutomationRegistrationParamsV1,
+    AutomationTaskType,
     EntryFunction,
     FeePayerRawTransaction,
     MultiAgentRawTransaction,
@@ -36,6 +48,8 @@ from supra_sdk.transactions import (
 )
 from supra_sdk.type_tag import StructTag, TypeTag
 
+_MAX_TTL_KEY = "max_transaction_time_to_live_seconds"
+
 
 @dataclass
 class TransactionConfig:
@@ -46,11 +60,22 @@ class TransactionConfig:
     submission.
 
     Attributes:
-        expiration_ttl (int): Time-to-live, in seconds, before a transaction expires and is rejected by the network.
-            Defaults to 600.
+        expiration_ttl (int | None): Time-to-live, in seconds, before a transaction expires and is rejected by the
+            network, counted from the client's clock. An integer is used as given, even if it exceeds the node's
+            maximum (the node then refuses the transaction). `None` (the default) expires the transaction
+            `max_transaction_time_to_live_seconds - 5` seconds after the client's clock, where the maximum is read
+            once per client from `rpc/v3/transactions/parameters` (600 on every network; 600 is also used, without
+            caching, when the node answers 404 or omits the value). The node refuses a
+            transaction that expires after its own clock plus the maximum, so the 5-second margin lets the node's
+            clock be up to 5 seconds behind the client's.
         gas_unit_price (int): Price per unit of gas used to execute the transaction. Defaults to
             `min_configured_gas_price` obtained from `rpc/v3/transactions/estimate_gas_price` endpoint.
-        max_gas_amount (int): Maximum number of gas units allowed per transaction. Defaults to 500,000.
+        max_gas_amount (int | None): Maximum number of gas units allowed per transaction. An integer is used as
+            given. `None` (the default) estimates it for each transaction by simulation: the gas used times 1.5, at
+            least 1,500 units and at most what the sender's SUPRA balance pays for at the gas unit price. The node
+            accepts a transaction only if the balance covers `max_gas_amount * gas_unit_price`, and the estimate
+            raises `MaxGasEstimationError` when the balance cannot pay for the simulation or the simulation does not
+            succeed. Set an integer to skip the simulation.
         transaction_wait_time_in_seconds (int): Number of seconds to wait for a transaction to be executed before timing
             out. Defaults to 20.
         polling_wait_time_in_seconds (int): Delay, in seconds, between successive polling attempts when waiting for
@@ -60,9 +85,9 @@ class TransactionConfig:
 
     """
 
-    expiration_ttl: int = 600
+    expiration_ttl: int | None = None
     gas_unit_price: int | None = None
-    max_gas_amount: int = 500_000
+    max_gas_amount: int | None = None
     transaction_wait_time_in_seconds: int = 20
     polling_wait_time_in_seconds: int = 1
     wait_for_transaction: bool = True
@@ -75,6 +100,65 @@ class SupraClientConfig(TransactionConfig, ApiClientConfig):
     This dataclass inherits from both `TransactionConfig` and `ApiClientConfig`, allowing a single object to hold both
     transaction-related parameters and API client connection settings.
     """
+
+
+def _single_signer(
+    sender: Account,
+) -> Callable[[RawTransaction], SignedTransaction]:
+    def sign(raw_transaction: RawTransaction) -> SignedTransaction:
+        return SignedTransaction(
+            raw_transaction, sender.sign_transaction(raw_transaction)
+        )
+
+    return sign
+
+
+def _multi_agent_signer(
+    sender: Account, secondary_accounts: list[Account]
+) -> Callable[[RawTransaction], SignedTransaction]:
+    def sign(raw_transaction: RawTransaction) -> SignedTransaction:
+        multi_agent_raw_transaction = MultiAgentRawTransaction(
+            raw_transaction, [x.address() for x in secondary_accounts]
+        )
+        authenticator = Authenticator(
+            MultiAgentAuthenticator(
+                sender.sign_transaction(multi_agent_raw_transaction),
+                [
+                    (x.address(), x.sign_transaction(multi_agent_raw_transaction))
+                    for x in secondary_accounts
+                ],
+            )
+        )
+        return SignedTransaction(multi_agent_raw_transaction.inner(), authenticator)
+
+    return sign
+
+
+def _fee_payer_signer(
+    sender: Account, fee_payer: Account, secondary_accounts: list[Account]
+) -> Callable[[RawTransaction], SignedTransaction]:
+    def sign(raw_transaction: RawTransaction) -> SignedTransaction:
+        fee_payer_raw_transaction = FeePayerRawTransaction(
+            raw_transaction,
+            [x.address() for x in secondary_accounts],
+            fee_payer.address(),
+        )
+        authenticator = Authenticator(
+            FeePayerAuthenticator(
+                sender.sign_transaction(fee_payer_raw_transaction),
+                [
+                    (x.address(), x.sign_transaction(fee_payer_raw_transaction))
+                    for x in secondary_accounts
+                ],
+                (
+                    fee_payer.address(),
+                    fee_payer.sign_transaction(fee_payer_raw_transaction),
+                ),
+            )
+        )
+        return SignedTransaction(fee_payer_raw_transaction.inner(), authenticator)
+
+    return sign
 
 
 class SupraClient(
@@ -105,6 +189,7 @@ class SupraClient(
     """
 
     _chain_id: int | None
+    _transaction_parameters: dict[str, Any] | None
     transaction_config: TransactionConfig
 
     def __init__(
@@ -118,6 +203,8 @@ class SupraClient(
 
         """
         self._chain_id = None
+        self._transaction_parameters = None
+        self._transaction_parameters_lock = asyncio.Lock()
         supra_client_config = supra_client_config or SupraClientConfig()
 
         transaction_config = TransactionConfig(
@@ -150,6 +237,34 @@ class SupraClient(
         if not self._chain_id:
             self._chain_id = await self.network_chain_id()
         return self._chain_id
+
+    async def max_transaction_time_to_live(self) -> int:
+        """Provides the node's maximum transaction time-to-live in seconds.
+
+        The value (`max_transaction_time_to_live_seconds` of `rpc/v3/transactions/parameters`) is read from the node
+        once per client and cached. A node that has no such endpoint (404) or an answer without the key gets
+        `DEFAULT_MAX_TRANSACTION_TTL_SECONDS` (600, the maximum on every network); that fallback is not cached, so the
+        next call reads the node again. Any other failed read raises and is not cached.
+
+        Returns:
+            int: The largest number of seconds after the node's clock at which a transaction may expire.
+
+        """
+        async with self._transaction_parameters_lock:
+            if self._transaction_parameters is None:
+                try:
+                    parameters = await self.transaction_parameters()
+                except ApiError as error:
+                    if error.status_code != HTTPStatus.NOT_FOUND:
+                        raise
+                    return DEFAULT_MAX_TRANSACTION_TTL_SECONDS
+                if (
+                    not isinstance(parameters, dict)
+                    or parameters.get(_MAX_TTL_KEY) is None
+                ):
+                    return DEFAULT_MAX_TRANSACTION_TTL_SECONDS
+                self._transaction_parameters = parameters
+            return int(self._transaction_parameters[_MAX_TTL_KEY])
 
     async def account_supra_balance(self, account_address: AccountAddress) -> int:
         """Provides the Supra coin balance associated with the given account.
@@ -283,34 +398,202 @@ class SupraClient(
         sender: Account | AccountAddress,
         transaction_payload: TransactionPayload,
         sequence_number: int | None = None,
+        max_gas_amount: int | None = None,
+        fee_payer: Account | AccountAddress | None = None,
     ) -> RawTransaction:
         """Creates a raw transaction.
 
-        This method builds a raw transaction with the provided sender, payload, and optionally a custom sequence number.
+        This method builds a raw transaction with the provided sender, payload, and optionally a custom sequence number
+        and max gas amount.
+
+        The transaction expires `TransactionConfig.expiration_ttl` seconds after the client's clock. Without an
+        `expiration_ttl` it expires 5 seconds before the node's maximum time-to-live (`rpc/v3/transactions/parameters`,
+        read once per client), so that a node whose clock is up to 5 seconds behind the client's accepts it.
+
+        The max gas amount is `max_gas_amount`, else `TransactionConfig.max_gas_amount`, used as given. When neither is
+        set it is estimated: the transaction is simulated with the most gas the sender's SUPRA balance pays for at the
+        gas unit price (`balance // gas_unit_price`, at most 2,000,000,000 units), and the max gas amount is the gas used
+        times 1.5, rounded up, at least 1,500 and at most what the balance pays for. The node accepts a transaction only
+        if the sender's balance covers `max_gas_amount * gas_unit_price`, so an estimate needs a balance of at least the
+        gas used times the gas unit price. When `sender` is only an address there is no key to simulate with, and the
+        max gas amount is 20,000 units, at most what the balance pays for. The estimate is made against the node's
+        committed state. When the simulation reports the sequence number as ahead of the account's on the chain (a
+        transaction sent behind uncommitted ones), the account's sequence number is read and the transaction is
+        simulated again with that number; the returned transaction keeps `sequence_number`. A transaction that depends
+        on an uncommitted one does not simulate to `Success` even then: set `max_gas_amount` for it.
 
         Args:
             sender (Account | AccountAddress): The account object or its address.
             transaction_payload (TransactionPayload): The transaction payload.
-            sequence_number (int | None): The sender's sequence number. If not provided, it will be fetched
-                automatically. Default to None.
+            sequence_number (int | None): The sender's sequence number. `None` fetches it from the node; any integer,
+                including 0, is used as given without a request. Default to None.
+            max_gas_amount (int | None): Max gas units for this transaction. `None` uses the config value or the
+                estimate described above. Default to None.
+            fee_payer (Account | AccountAddress | None): The account that will pay for gas when the transaction is
+                wrapped for a fee payer. Its SUPRA balance, not the sender's, caps the estimated max gas, and the
+                simulation is made in fee-payer form (with no secondary signers) when both `sender` and `fee_payer`
+                are accounts; with only the fee payer's address there is no key to simulate with and the fallback of
+                20,000 units applies. It does not change the raw transaction, which is the same for every payer; no
+                balance is read when the max gas is explicit. Default to None.
 
         Returns:
             RawTransaction: The constructed raw transaction object.
 
+        Raises:
+            MaxGasEstimationError: If the max gas amount has to be estimated and the balance cannot be read, is too
+                low to pay for any gas, or the simulation fails or does not succeed.
+
+        """
+        gas_payer = None
+        to_signed = None
+        if fee_payer is not None:
+            gas_payer = (
+                fee_payer.address() if isinstance(fee_payer, Account) else fee_payer
+            )
+            if isinstance(sender, Account) and isinstance(fee_payer, Account):
+                to_signed = _fee_payer_signer(sender, fee_payer, [])
+        return await self._build_raw_transaction(
+            sender,
+            transaction_payload,
+            sequence_number,
+            max_gas_amount,
+            to_signed,
+            gas_payer,
+        )
+
+    async def _build_raw_transaction(
+        self,
+        sender: Account | AccountAddress,
+        transaction_payload: TransactionPayload,
+        sequence_number: int | None,
+        max_gas_amount: int | None,
+        to_signed: Callable[[RawTransaction], SignedTransaction] | None = None,
+        gas_payer: AccountAddress | None = None,
+    ) -> RawTransaction:
+        """Builds the raw transaction; `to_signed` and `gas_payer` give the form that is simulated to estimate max gas.
+
+        `to_signed` turns the raw transaction into the signed transaction that will be submitted (default: signed by
+        `sender` alone, when `sender` is an `Account`). `gas_payer` is the account whose balance pays for gas (default:
+        the sender).
         """
         sender_address = sender.address() if isinstance(sender, Account) else sender
-        sequence_number = sequence_number or await self.account_sequence_number(
-            sender_address
+        resolved_sequence_number = (
+            await self.account_sequence_number(sender_address)
+            if sequence_number is None
+            else sequence_number
         )
-        return RawTransaction(
-            sender_address,
-            sequence_number,
-            transaction_payload,
-            self.transaction_config.max_gas_amount,
+        gas_unit_price = (
             self.transaction_config.gas_unit_price
-            or (await self.estimate_gas_price())["min_configured_gas_price"],
-            int(time.time()) + self.transaction_config.expiration_ttl,
-            await self.chain_id(),
+            or (await self.estimate_gas_price())["min_configured_gas_price"]
+        )
+        expiration_timestamp = await self._expiration_timestamp()
+        chain_id = await self.chain_id()
+
+        def build(max_gas: int, sequence_number: int | None = None) -> RawTransaction:
+            return RawTransaction(
+                sender_address,
+                (
+                    resolved_sequence_number
+                    if sequence_number is None
+                    else sequence_number
+                ),
+                transaction_payload,
+                max_gas,
+                gas_unit_price,
+                expiration_timestamp,
+                chain_id,
+            )
+
+        if max_gas_amount is None:
+            max_gas_amount = self.transaction_config.max_gas_amount
+        if max_gas_amount is None:
+            if to_signed is None and gas_payer is None and isinstance(sender, Account):
+                to_signed = _single_signer(sender)
+            max_gas_amount = await self._estimate_max_gas_amount(
+                sender_address,
+                gas_payer or sender_address,
+                gas_unit_price,
+                build,
+                to_signed,
+            )
+        return build(max_gas_amount)
+
+    async def _simulate_unsigned(
+        self,
+        raw_transaction: RawTransaction,
+        to_signed: Callable[[RawTransaction], SignedTransaction],
+    ) -> dict[str, Any]:
+        """Simulates the transaction that `to_signed` builds from `raw_transaction`.
+
+        The signed transaction is made here and discarded, so `simulate_transaction`, which replaces the signatures of
+        the object it is given, cannot affect a transaction of the caller.
+        """
+        try:
+            return await self.simulate_transaction(to_signed(raw_transaction))
+        except ApiError as error:
+            raise MaxGasEstimationError(
+                f"Simulation of the transaction to estimate max gas failed: {error}; set max_gas_amount"
+            ) from error
+
+    async def _estimate_max_gas_amount(
+        self,
+        sender_address: AccountAddress,
+        gas_payer: AccountAddress,
+        gas_unit_price: int,
+        build: Callable[[int, int | None], RawTransaction],
+        to_signed: Callable[[RawTransaction], SignedTransaction] | None,
+    ) -> int:
+        try:
+            balance = await self.account_supra_balance(gas_payer)
+        except ApiError as error:
+            raise MaxGasEstimationError(
+                f"Could not read the SUPRA balance of {gas_payer} to estimate max gas: {error}; "
+                "set max_gas_amount"
+            ) from error
+        affordable = affordable_gas_amount(balance, gas_unit_price)
+        if affordable == 0:
+            raise MaxGasEstimationError(
+                f"The SUPRA balance of {gas_payer} ({balance} quants) does not pay for one unit of gas at the gas "
+                f"unit price of {gas_unit_price} quants"
+            )
+        if to_signed is None:
+            return min(FALLBACK_MAX_GAS_AMOUNT, affordable)
+        raw_transaction = build(affordable, None)
+        simulation = await self._simulate_unsigned(raw_transaction, to_signed)
+        if not is_sequence_number_too_new(simulation):
+            return max_gas_from_simulation(simulation, affordable)
+
+        # A transaction sent behind uncommitted ones of the same account: the simulation runs on committed state, so
+        # it is repeated at the account's sequence number on the chain. The submitted transaction keeps its own.
+        try:
+            chain_sequence_number = await self.account_sequence_number(sender_address)
+        except ApiError as error:
+            raise MaxGasEstimationError(
+                f"The sequence number {raw_transaction.sequence_number} is ahead of the account's, and reading the "
+                f"account's sequence number failed: {error}; set max_gas_amount"
+            ) from error
+        simulation = await self._simulate_unsigned(
+            build(affordable, chain_sequence_number), to_signed
+        )
+        try:
+            return max_gas_from_simulation(simulation, affordable)
+        except MaxGasEstimationError as error:
+            raise MaxGasEstimationError(
+                f"The sequence number {raw_transaction.sequence_number} is ahead of the account's on the chain "
+                f"({chain_sequence_number}) and the simulation at the chain's number did not succeed "
+                f"(status: {error.status}, vm_status: {error.vm_status}); if the transaction depends on an "
+                "uncommitted transaction, set max_gas_amount",
+                error.status,
+                error.vm_status,
+                error.simulation,
+            ) from error
+
+    async def _expiration_timestamp(self) -> int:
+        ttl = self.transaction_config.expiration_ttl
+        if ttl is not None:
+            return int(time.time()) + ttl
+        return default_expiration_timestamp(
+            int(time.time()), await self.max_transaction_time_to_live()
         )
 
     async def create_signed_transaction(
@@ -318,27 +601,37 @@ class SupraClient(
         sender: Account,
         transaction_payload: TransactionPayload,
         sequence_number: int | None = None,
+        max_gas_amount: int | None = None,
     ) -> SignedTransaction:
         """Creates a signed transaction.
 
         This method builds a raw transaction, signs it using the sender's key, wraps it in an authenticator,
         and generates signed transaction payload.
 
+        The max gas amount and the expiration time follow `create_raw_transaction`: an explicit `max_gas_amount` (here
+        or in `TransactionConfig`) is used as given, otherwise it is estimated by a simulation, which needs the sender's
+        SUPRA balance to cover the gas used times the gas unit price.
+
         Args:
             sender (Account): The account signing the transaction.
             transaction_payload (TransactionPayload): The transaction payload.
             sequence_number (int | None): The sequence number to use. If not provided, the current sequence number will
-                be fetched. Default to None.
+                be fetched; 0 is used as given. Default to None.
+            max_gas_amount (int | None): Max gas units for this transaction. `None` uses the config value or the
+                estimate. Default to None.
 
         Returns:
             SignedTransaction: The constructed signed transaction object.
 
+        Raises:
+            MaxGasEstimationError: If the max gas amount has to be estimated and that fails.
+
         """
-        raw_transaction = await self.create_raw_transaction(
-            sender, transaction_payload, sequence_number
+        to_signed = _single_signer(sender)
+        raw_transaction = await self._build_raw_transaction(
+            sender, transaction_payload, sequence_number, max_gas_amount, to_signed
         )
-        authenticator = sender.sign_transaction(raw_transaction)
-        return SignedTransaction(raw_transaction, authenticator)
+        return to_signed(raw_transaction)
 
     async def create_fee_payer_transaction(
         self,
@@ -346,82 +639,78 @@ class SupraClient(
         fee_payer: Account,
         secondary_accounts: list[Account],
         transaction_payload: TransactionPayload,
+        max_gas_amount: int | None = None,
     ) -> SignedTransaction:
         """Creates a fee-payer authenticator type signed transaction.
 
         This method builds and signs a fee-payer authenticator type transaction, where the main sender, fee payer and
         one or more secondary accounts sign the same raw transaction.
 
+        An explicit `max_gas_amount` (here or in `TransactionConfig`) is used as given, otherwise it is estimated by
+        simulating the fee-payer transaction. The fee payer pays for gas, so the estimate needs the fee payer's SUPRA
+        balance to cover the gas used times the gas unit price. See `create_raw_transaction`.
+
         Args:
             sender (Account): The primary account sending the transaction.
             fee_payer (Account): The fee payer account to pay transaction fee.
             secondary_accounts (list[Account]): The secondary accounts that also authorize the transaction.
             transaction_payload (TransactionPayload): The transaction payload.
+            max_gas_amount (int | None): Max gas units for this transaction. `None` uses the config value or the
+                estimate. Default to None.
 
         Returns:
             SignedTransaction: The constructed multi-agent authenticator type signed transaction.
 
+        Raises:
+            MaxGasEstimationError: If the max gas amount has to be estimated and that fails.
+
         """
-        fee_payer_raw_transaction = FeePayerRawTransaction(
-            await self.create_raw_transaction(sender, transaction_payload),
-            [x.address() for x in secondary_accounts],
+        to_signed = _fee_payer_signer(sender, fee_payer, secondary_accounts)
+        raw_transaction = await self._build_raw_transaction(
+            sender,
+            transaction_payload,
+            None,
+            max_gas_amount,
+            to_signed,
             fee_payer.address(),
         )
-        authenticator = Authenticator(
-            FeePayerAuthenticator(
-                sender.sign_transaction(fee_payer_raw_transaction),
-                [
-                    (
-                        x.address(),
-                        x.sign_transaction(fee_payer_raw_transaction),
-                    )
-                    for x in secondary_accounts
-                ],
-                (
-                    fee_payer.address(),
-                    fee_payer.sign_transaction(fee_payer_raw_transaction),
-                ),
-            )
-        )
-        return SignedTransaction(fee_payer_raw_transaction.inner(), authenticator)
+        return to_signed(raw_transaction)
 
     async def create_multi_agent_transaction(
         self,
         sender: Account,
         secondary_accounts: list[Account],
         transaction_payload: TransactionPayload,
+        max_gas_amount: int | None = None,
     ) -> SignedTransaction:
         """Creates a multi-agent authenticator type signed transaction.
 
         This method builds and signs a multi-agent authenticator type transaction, where the main sender and one or
         more secondary accounts sign the same raw transaction.
 
+        An explicit `max_gas_amount` (here or in `TransactionConfig`) is used as given, otherwise it is estimated by
+        simulating the multi-agent transaction, which needs the sender's SUPRA balance to cover the gas used times the
+        gas unit price. See `create_raw_transaction`.
+
         Args:
             sender (Account): The primary account sending the transaction.
             secondary_accounts (list[Account]): The secondary accounts that also authorize the transaction.
             transaction_payload (TransactionPayload): The transaction payload.
+            max_gas_amount (int | None): Max gas units for this transaction. `None` uses the config value or the
+                estimate. Default to None.
 
         Returns:
             SignedTransaction: The constructed multi-agent authenticator type signed transaction.
 
+        Raises:
+            MaxGasEstimationError: If the max gas amount has to be estimated and that fails.
+
         """
-        multi_agent_raw_transaction = MultiAgentRawTransaction(
-            await self.create_raw_transaction(sender, transaction_payload),
-            [x.address() for x in secondary_accounts],
+        to_signed = _multi_agent_signer(sender, secondary_accounts)
+        raw_transaction = await self._build_raw_transaction(
+            sender, transaction_payload, None, max_gas_amount, to_signed
         )
-        authenticator = Authenticator(
-            MultiAgentAuthenticator(
-                sender.sign_transaction(multi_agent_raw_transaction),
-                [
-                    (
-                        x.address(),
-                        x.sign_transaction(multi_agent_raw_transaction),
-                    )
-                    for x in secondary_accounts
-                ],
-            )
-        )
-        return SignedTransaction(multi_agent_raw_transaction.inner(), authenticator)
+        return to_signed(raw_transaction)
 
     async def register_automation_task(
         self,
@@ -432,8 +721,14 @@ class SupraClient(
         automation_fee_cap_for_epoch: int,
         automation_expiration_timestamp_secs: int,
         automation_aux_data: list[bytes],
+        automation_task_type: AutomationTaskType | None = None,
+        automation_priority: int | None = None,
     ) -> str:
         """Registers Supra automation task.
+
+        With neither ``automation_task_type`` nor ``automation_priority`` the task is
+        registered with version 1 of the registration parameters. With either, version 2
+        is used, and a missing task type is ``AutomationTaskType.USER``.
 
         Args:
             owner_account (Account): Account registering an automation task.
@@ -444,21 +739,28 @@ class SupraClient(
             automation_fee_cap_for_epoch (int): Maximum total fee for the epoch.
             automation_expiration_timestamp_secs (int): Expiration time for automation.
             automation_aux_data (list[bytes]): Auxiliary data for automation.
+            automation_task_type (AutomationTaskType | None): ``USER`` or ``SYSTEM``.
+                A ``SYSTEM`` task can only be registered by an account the registry has
+                authorised for system tasks; other accounts' registrations abort.
+                Defaults to version 1 parameters (a user task).
+            automation_priority (int | None): Priority of the task. Without a priority,
+                the registry uses the task's index as its priority.
 
         Returns:
             str: Transaction hash.
 
         """
-        automation_params_v1 = AutomationRegistrationParamsV1(
-            automated_function,
-            automation_max_gas_amount,
-            automation_gas_price_cap,
-            automation_fee_cap_for_epoch,
-            automation_expiration_timestamp_secs,
-            automation_aux_data,
-        )
         transaction_payload = TransactionPayload(
-            AutomationRegistrationParams(automation_params_v1)
+            AutomationRegistrationParams.build(
+                automated_function,
+                automation_max_gas_amount,
+                automation_gas_price_cap,
+                automation_fee_cap_for_epoch,
+                automation_expiration_timestamp_secs,
+                automation_aux_data,
+                automation_task_type,
+                automation_priority,
+            )
         )
         signed_transaction = await self.create_signed_transaction(
             owner_account,
@@ -534,11 +836,18 @@ class SupraClient(
         recipient: AccountAddress,
         amount: int,
         sequence_number: int | None = None,
+        max_gas_amount: int | None = None,
     ) -> str:
         """Transfers given amount of SupraCoin to a given recipient.
 
         This method builds an `EntryFunction` payload for transferring the `SupraCoin`, signs it with the sender's
         account, and submits it to the network.
+
+        Without a `max_gas_amount` (here or in `TransactionConfig`) the max gas is estimated by a simulation, which
+        needs the sender's balance to cover the maximum gas deposit, in addition to the transferred amount. A transfer
+        that creates the recipient uses about 1,000 units, so at the minimum gas unit price of 100,000 quants the
+        gas costs 10^8 quants (1 SUPRA, where 1 SUPRA = 10^8 quants), and the max gas of about 1,500 units (the gas
+        used times 1.5) is a deposit of about 1.5 SUPRA.
 
         Args:
             sender (Account): Sender account.
@@ -546,13 +855,20 @@ class SupraClient(
             amount (int): The amount of coins to transfer.
             sequence_number (int | None): The sender's sequence number. If not provided, it will be fetched
                 automatically. Default to None.
+            max_gas_amount (int | None): Max gas units for this transaction. `None` uses the config value or the
+                estimate. Default to None.
 
         Returns:
             str: Transaction hash.
 
         """
         return await self.transfer_coins(
-            sender, recipient, "0x1::supra_coin::SupraCoin", amount, sequence_number
+            sender,
+            recipient,
+            "0x1::supra_coin::SupraCoin",
+            amount,
+            sequence_number,
+            max_gas_amount,
         )
 
     async def transfer_coins(
@@ -562,11 +878,16 @@ class SupraClient(
         coin_type: str,
         amount: int,
         sequence_number: int | None = None,
+        max_gas_amount: int | None = None,
     ) -> str:
         """Transfer a given coin type coins to a recipient.
 
         This method builds a coin transfer payload for any supported coin type, signs it with the sender's account,
         and submits it to the network.
+
+        Gas is paid in SUPRA whatever the coin type. Without a `max_gas_amount` (here or in `TransactionConfig`) the max
+        gas is estimated by a simulation, which needs the sender's SUPRA balance to cover the gas used times the gas unit
+        price.
 
         Args:
             sender (Account): Sender account.
@@ -575,6 +896,8 @@ class SupraClient(
             amount (int): The amount of coins to transfer.
             sequence_number (int | None): The sender's sequence number. If not provided, it will be fetched
                 automatically. Default to None.
+            max_gas_amount (int | None): Max gas units for this transaction. `None` uses the config value or the
+                estimate. Default to None.
 
         Returns:
             str: Transaction hash.
@@ -591,7 +914,10 @@ class SupraClient(
             transaction_arguments,
         )
         signed_transaction = await self.create_signed_transaction(
-            sender, TransactionPayload(transaction_payload), sequence_number
+            sender,
+            TransactionPayload(transaction_payload),
+            sequence_number,
+            max_gas_amount,
         )
         return await self.submit_transaction(signed_transaction)
 

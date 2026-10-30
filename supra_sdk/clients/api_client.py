@@ -4,7 +4,7 @@
 import json
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import Any, cast
+from typing import Any
 
 import httpx
 
@@ -171,7 +171,7 @@ class ApiClient:
             headers["Content-Type"] = "application/json"
             content = json.dumps(data)
         else:
-            content = cast(bytes, data)
+            content = data
 
         response = await self._client.post(
             url=self._url(endpoint),
