@@ -42,6 +42,8 @@ async def main():
     # and/or `automation_priority`. Without a priority, the registry uses the task's
     # index as its priority:
     #
+    #     from supra_sdk.transactions import AutomationTaskType
+    #
     #     automation_task_type=AutomationTaskType.USER,
     #     automation_priority=10,
     task_registration_tx_hash = await supra_client.register_automation_task(
