@@ -58,6 +58,34 @@ jobs:
       - name: Build
         run: uv build
 
+  node-tests:
+    name: Node-backed tests
+    # Runs only when the repository variable SUPRA_RPC_URL is set.
+    if: ${{ vars.SUPRA_RPC_URL != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      UV_PYTHON: "3.12"
+      SUPRA_RPC_URL: ${{ vars.SUPRA_RPC_URL }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Node-backed tests
+        run: uv run python -m unittest tests.unit.test_supra_client
+
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest
