@@ -17,6 +17,31 @@ python -m pip install supra-sdk
 
 Check [examples](examples/README.md) section.
 
+### SUPRA as a fungible asset
+
+SUPRA exists in two forms: a `CoinStore` balance and a balance in the account's primary fungible store (metadata
+address `0xa`). A Devnet created with SUPRA as a fungible asset from genesis funds accounts in the fungible store only;
+Testnet and Mainnet accounts hold a `CoinStore` balance until they migrate it.
+
+- `account_supra_balance` / `account_coin_balance` read `0x1::coin::balance`: the `CoinStore` balance plus the paired
+  fungible asset balance, so the sum is the same in either form.
+- `account_fa_balance` reads the fungible store alone (`0x1::primary_fungible_store::balance`), and is 0 for an account
+  that has only a `CoinStore` balance.
+- `transfer_fungible_asset` debits the sender's fungible store only. `transfer_supra_coin` moves SUPRA held in either form.
+- `migrate_coin_to_fungible_store` moves a `CoinStore` balance into the fungible store. It is meaningful only where a
+  `CoinStore` exists, and cannot be undone.
+- `account_fa_transactions` lists the transactions of an account's primary fungible store, a page at a time. The
+  returned cursor is `None` at the end of the feed (a v11.7.0 node ends it with an empty page instead).
+
+```python
+balance = await client.account_fa_balance(alice.address())
+await client.transfer_fungible_asset(alice, bob.address(), 1_000)
+transactions, cursor = await client.account_fa_transactions(bob.address())
+```
+
+All of them default to SUPRA and take a `metadata_address` for another fungible asset (`migrate_coin_to_fungible_store`
+takes a `coin_type`). See [`examples/fungible_asset.py`](examples/fungible_asset.py).
+
 ## Reference Docs
 
 For the function specific documentation, check out the `supra-python-sdk` [reference documentation](https://supra-python-sdk.docs.supra.com/).
