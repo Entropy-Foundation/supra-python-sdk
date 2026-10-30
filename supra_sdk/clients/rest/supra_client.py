@@ -831,9 +831,10 @@ class SupraClient(
         account, and submits it to the network.
 
         Without a `max_gas_amount` (here or in `TransactionConfig`) the max gas is estimated by a simulation, which
-        needs the sender's balance to cover the gas used (about 1,000 units, so 0.01 SUPRA at the minimum gas unit price
-        of 100,000 quants, when the transfer creates the recipient) times the gas unit price, in addition to the
-        transferred amount.
+        needs the sender's balance to cover the maximum gas deposit, in addition to the transferred amount. A transfer
+        that creates the recipient uses about 1,000 units, so at the minimum gas unit price of 100,000 quants the
+        gas costs 10^8 quants (1 SUPRA, where 1 SUPRA = 10^8 quants), and the max gas of about 1,500 units (the gas
+        used times 1.5) is a deposit of about 1.5 SUPRA.
 
         Args:
             sender (Account): Sender account.
