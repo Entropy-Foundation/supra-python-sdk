@@ -160,10 +160,12 @@ class ApiError(Exception):
     """Exception raised when the API returns a non-200 response.
 
     Attributes:
+        message (str): The response body.
         status_code (int): The HTTP status code returned.
 
     """
 
+    message: str
     status_code: int
 
     def __init__(self, message: str, status_code: int):
@@ -174,6 +176,7 @@ class ApiError(Exception):
             status_code (int): The HTTP status code returned.
 
         """
+        self.message = message
         self.status_code = status_code
         super().__init__(f"{{message: {message}, status_code: {status_code}}}")
 
