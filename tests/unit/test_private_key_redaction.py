@@ -10,6 +10,7 @@ import os
 import stat
 import tempfile
 import unittest
+from unittest import mock
 
 from supra_sdk.account import Account
 from supra_sdk.ed25519 import PrivateKey
@@ -92,6 +93,21 @@ class TestAccountStorePermissions(unittest.TestCase):
         with open(self.path) as file:
             data = json.load(file)
         self.assertEqual(data["private_key"], account.private_key.hex())
+
+    def test_failed_write_keeps_old_file_and_leaves_no_temp_file(self):
+        old = Account.generate()
+        old.store(self.path)
+        with open(self.path) as file:
+            before = file.read()
+        with (
+            mock.patch("supra_sdk.account.json.dump", side_effect=OSError("disk full")),
+            self.assertRaises(OSError),
+        ):
+            Account.generate().store(self.path)
+        with open(self.path) as file:
+            self.assertEqual(file.read(), before)
+        self.assertEqual(os.listdir(self.dir.name), ["account.json"])
+        self.assertEqual(Account.load(self.path), old)
 
 
 if __name__ == "__main__":
