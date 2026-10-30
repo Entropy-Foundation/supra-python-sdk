@@ -25,8 +25,16 @@ class PrivateKey(asymmetric_crypto.PrivateKey):
             return NotImplemented
         return self.key == other.key
 
-    def __str__(self):
-        return self.hex()
+    def __str__(self) -> str:
+        """Returns a redacted form that identifies the key by its public key.
+
+        The private key is never part of `str()`, `repr()`, f-strings or log
+        output. Use `hex()` to export it explicitly.
+        """
+        return f"PrivateKey(public_key={self.public_key()})"
+
+    def __repr__(self) -> str:
+        return self.__str__()
 
     @staticmethod
     def from_str(value: str) -> PrivateKey:
@@ -35,6 +43,7 @@ class PrivateKey(asymmetric_crypto.PrivateKey):
         return PrivateKey(SigningKey(bytes.fromhex(value)))
 
     def hex(self) -> str:
+        """Returns the private key as 0x-prefixed hex. This is the explicit export of the secret."""
         return f"0x{self.key.encode().hex()}"
 
     def public_key(self) -> PublicKey:
