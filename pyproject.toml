@@ -19,11 +19,12 @@ keywords = [
 authors = [{ name = "Supra", email = "opensource@supra.com" }]
 dependencies = [
     "httpx[http2]>=0.28.1,<0.29.0",
-    "PyNaCl>=1.5.0,<2.0.0",
+    "PyNaCl>=1.6.2,<2.0.0",
     "typing-extensions>=4.4.0,<5.0.0",
-    "behave>=1.2.6,<2.0.0",
-    "types-six>=1.16.21.20240513,<2.0.0",
 ]
+
+[project.optional-dependencies]
+examples = ["aiofiles>=24.1.0"]
 
 [project.urls]
 Homepage = "https://github.com/Entropy-Foundation/supra-python-sdk"
@@ -65,7 +66,9 @@ select = [
     # Ruff-specific rules
     "RUF",
 ]
-ignore = ["E203", "E501", "E701", "B017", "RUF012"]
+# UP042 would turn `class X(str, Enum)` into StrEnum, which changes str() of the
+# members and so the wire and display behaviour.
+ignore = ["E203", "E501", "E701", "B017", "RUF012", "UP042"]
 exclude = ["__init__.py"]
 
 
@@ -76,6 +79,19 @@ combine-as-imports = true
 [tool.ruff.format]
 docstring-code-format = true
 
+[tool.mypy]
+python_version = "3.12"
+files = ["supra_sdk"]
+warn_unused_ignores = true
+no_implicit_optional = true
+
+[tool.coverage.run]
+source = ["supra_sdk"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+
 [tool.uv.build-backend]
 module-name = "supra_sdk"
 module-root = ""
@@ -83,11 +99,14 @@ module-root = ""
 [dependency-groups]
 dev = [
     "aiofiles>=24.1.0",
+    "behave>=1.2.6,<2.0.0",
     "black>=25.1.0",
     "coverage>=7.10.6",
+    "mypy>=1.18.1",
     "pip>=25.2",
     "ruff>=0.13.0",
     "sphinx>=8.2.3",
     "sphinx-autodoc-typehints>=3.2.0",
     "sphinx-rtd-theme>=3.0.2",
+    "types-six>=1.16.21.20240513,<2.0.0",
 ]
