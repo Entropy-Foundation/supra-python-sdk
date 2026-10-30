@@ -584,15 +584,13 @@ class AutomationRegistrationParams:
     def deserialize(deserializer: Deserializer) -> AutomationRegistrationParams:
         variant = deserializer.uleb128()
         if variant == AutomationRegistrationParams.V1:
-            registration_params = AutomationRegistrationParamsV1.deserialize(
-                deserializer
+            return AutomationRegistrationParams(
+                AutomationRegistrationParamsV1.deserialize(deserializer)
             )
-            return AutomationRegistrationParams(registration_params)
         elif variant == AutomationRegistrationParams.V2:
-            registration_params = AutomationRegistrationParamsV2.deserialize(
-                deserializer
+            return AutomationRegistrationParams(
+                AutomationRegistrationParamsV2.deserialize(deserializer)
             )
-            return AutomationRegistrationParams(registration_params)
         else:
             raise Exception("Invalid automation registration params type")
 
