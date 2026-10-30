@@ -153,7 +153,7 @@ class PathValueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             self.rec.last_target,
             "/prefix/rpc/v3/accounts/0x1/resources/"
-            "0x1%3A%3Acoin%3A%3ACoinStore%3C0x1%3A%3Asupra_coin%3A%3ASupraCoin%3E",
+            "0x1::coin::CoinStore%3C0x1::supra_coin::SupraCoin%3E",
         )
 
     async def test_encoded_struct_type_decodes_to_the_original(self):
@@ -166,12 +166,11 @@ class PathValueTests(unittest.IsolatedAsyncioTestCase):
         await self.client.events_by_type(type_tag)
         self.assertEqual(
             self.rec.last_target,
-            "/prefix/rpc/v3/events/"
-            "0x1%3A%3Atable%3A%3ATable%3Cu64%2C%200x1%3A%3Astring%3A%3AString%3E",
+            "/prefix/rpc/v3/events/0x1::table::Table%3Cu64,%200x1::string::String%3E",
         )
 
     async def test_resource_type_special_characters_stay_in_one_segment(self):
-        for value in ("a/b", "a?b=c", "a#b", "a/../b", "%2e%2e", "a b"):
+        for value in ("a/b", "a?b=c", "a#b", "a/../b", "%2e%2e", "a b", "a%b"):
             with self.subTest(value=value):
                 await self.client.account_resource(ADDRESS, value)
                 url = self.rec.last.url

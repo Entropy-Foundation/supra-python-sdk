@@ -18,9 +18,10 @@ _HEX_HASH = re.compile(r"(0x)?[0-9a-fA-F]{64}")
 def encode_path_segment(value: str, name: str = "value") -> str:
     """Percent-encodes a caller-supplied value so that it forms exactly one URL path segment.
 
-    Every reserved character, including `/`, `?`, `#`, `<`, `>`, `:` and `,`, is encoded. The node decodes
-    path segments before parsing them, so a Move type such as
-    `0x1::coin::CoinStore<0x1::supra_coin::SupraCoin>` reaches it unchanged.
+    `:` and `,` are valid in a path segment and are left as they are. Every other character that cannot
+    appear in a segment, including `/`, `?`, `#`, `%`, `<`, `>` and space, is encoded. The node decodes path
+    segments before parsing them, so a Move type such as `0x1::coin::CoinStore<0x1::supra_coin::SupraCoin>`
+    reaches it unchanged and is sent as `0x1::coin::CoinStore%3C0x1::supra_coin::SupraCoin%3E`.
 
     Args:
         value (str): The value to place in a path segment.
@@ -32,7 +33,7 @@ def encode_path_segment(value: str, name: str = "value") -> str:
     """
     if not isinstance(value, str) or not value:
         raise ValueError(f"{name} must be a non-empty string")
-    return quote(value, safe="")
+    return quote(value, safe=":,")
 
 
 def address_segment(value: AccountAddress | str, name: str = "address") -> str:
