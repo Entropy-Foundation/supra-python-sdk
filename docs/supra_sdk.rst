@@ -64,6 +64,14 @@ ED25519
    :show-inheritance:
    :undoc-members:
 
+Fungible Asset
+-------------------------------
+
+.. automodule:: supra_sdk.fungible_asset
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
 Metadata
 --------------------------
 
