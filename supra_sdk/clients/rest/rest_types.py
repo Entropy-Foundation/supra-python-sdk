@@ -156,6 +156,9 @@ ACCOUNT_TRANSACTIONS_ENDPOINT = (
 ACCOUNT_COIN_TRANSACTIONS_ENDPOINT = (
     f"{RPC_API_PREFIX}/accounts/{{account_address}}/coin_transactions"
 )
+ACCOUNT_FA_TRANSACTIONS_ENDPOINT = (
+    f"{RPC_API_PREFIX}/accounts/{{account_address}}/fa_transactions"
+)
 ACCOUNT_AUTOMATED_TRANSACTIONS_ENDPOINT = (
     f"{RPC_API_PREFIX}/accounts/{{account_address}}/automated_transactions"
 )
