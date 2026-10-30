@@ -10,6 +10,7 @@ from supra_sdk.clients.rest.rest_types import (
     TRANSACTION_PARAMETERS_ENDPOINT,
     TRANSACTION_SIMULATE_TRANSACTION_ENDPOINT,
     TRANSACTION_SUBMIT_TRANSACTION_ENDPOINT,
+    format_endpoint,
 )
 
 
@@ -31,7 +32,7 @@ class TransactionRestClient(RestClient):
            dict[str, Any]: Detail of a transaction by given transaction hash.
 
         """
-        endpoint = TRANSACTION_BY_HASH_ENDPOINT.format(hash=tx_hash)
+        endpoint = format_endpoint(TRANSACTION_BY_HASH_ENDPOINT, hash=tx_hash)
         return (await self.api_client.get(endpoint=endpoint)).json()
 
     async def estimate_gas_price(self) -> dict[str, Any]:

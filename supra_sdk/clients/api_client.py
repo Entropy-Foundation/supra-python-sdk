@@ -5,7 +5,6 @@ import json
 from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Any
-from urllib.parse import urljoin
 
 import httpx
 
@@ -44,7 +43,8 @@ class ApiClient:
 
     Attributes:
         _client (httpx.AsyncClient): HTTP client to send the http request.
-        base_url (str): The base URL of the API.
+        base_url (str): The base URL of the API, always ending in `/`. A path prefix such as
+            `https://host/prefix` is kept: requests go to `https://host/prefix/rpc/v3/...`.
         api_client_config (ApiClientConfig): Configuration options for API client.
 
     """
@@ -53,16 +53,31 @@ class ApiClient:
     base_url: str
     api_client_config: ApiClientConfig
 
-    def __init__(self, base_url: str, api_client_config: ApiClientConfig | None = None):
+    def __init__(
+        self,
+        base_url: str,
+        api_client_config: ApiClientConfig | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ):
         """Initializes the API client.
 
         Args:
-            base_url (str): The base URL of the API.
+            base_url (str): The base URL of the API: scheme, host and an optional path prefix. It must not contain a
+                query string or a fragment; pass an access token through `ApiClientConfig` instead.
             api_client_config (ApiClientConfig): Configuration options for API client. Default to None.
+            transport (httpx.AsyncBaseTransport | None): Optional HTTP transport, e.g. `httpx.MockTransport` in tests.
+                Default to None, which uses httpx's default network transport.
+
+        Raises:
+            ValueError: If `base_url` contains a query string or a fragment.
 
         """
+        if "?" in base_url or "#" in base_url:
+            raise ValueError(
+                f"base_url must not contain a query string or a fragment: {base_url!r}"
+            )
         api_client_config = api_client_config or ApiClientConfig()
-        self.base_url = base_url
+        self.base_url = base_url if base_url.endswith("/") else base_url + "/"
         limits = httpx.Limits()
         timeout = httpx.Timeout(60.0, pool=None)
         headers = {Metadata.SUPRA_HEADER: Metadata.get_supra_header_val()}
@@ -71,8 +86,21 @@ class ApiClient:
             limits=limits,
             timeout=timeout,
             headers=headers,
+            transport=transport,
         )
         self.api_client_config = api_client_config
+
+    def _url(self, endpoint: str) -> str:
+        """Appends a relative endpoint to the base URL, keeping any path prefix of the base URL.
+
+        Args:
+            endpoint (str): Endpoint relative to the base URL. Its path values must already be percent-encoded.
+
+        Returns:
+            str: The full request URL.
+
+        """
+        return self.base_url + endpoint.lstrip("/")
 
     async def close(self):
         """Closes the HTTP client session."""
@@ -106,7 +134,7 @@ class ApiClient:
             headers["Authorization"] = f"Bearer {self.api_client_config.access_token}"
 
         response = await self._client.get(
-            url=urljoin(self.base_url, endpoint), params=params, headers=headers
+            url=self._url(endpoint), params=params, headers=headers
         )
         if strict_mode and response.status_code != HTTPStatus.OK:
             raise ApiError(response.text, response.status_code)
@@ -146,7 +174,7 @@ class ApiClient:
             content = data
 
         response = await self._client.post(
-            url=urljoin(self.base_url, endpoint),
+            url=self._url(endpoint),
             params=params,
             headers=headers,
             content=content,

@@ -305,12 +305,12 @@ class SupraClient(
 
     async def account_sequence_number(
         self,
-        account_address: AccountAddress,
+        account_address: AccountAddress | str,
     ) -> int:
         """Provides the current sequence number of the given account.
 
         Args:
-            account_address (AccountAddress): Address of the account.
+            account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.
 
         Returns:
             int: The current sequence number for the given account.
@@ -1093,12 +1093,13 @@ class SupraClient(
         return await self.submit_transaction(signed_transaction)
 
     async def faucet(
-        self, address: AccountAddress, wait_for_faucet: bool = True
+        self, address: AccountAddress | str, wait_for_faucet: bool = True
     ) -> str | None:
         """Requests faucet funds to be sent to the given account address.
 
         Args:
-            address (AccountAddress): The target account address to receive funds.
+            address (AccountAddress | str): The target account address to receive funds, as an `AccountAddress` or a
+                hex string.
             wait_for_faucet (bool): Flag indicates whether wait for faucet should be done or not. Default to True.
 
         Returns:
