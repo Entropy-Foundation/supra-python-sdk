@@ -58,7 +58,7 @@ class Deserializer:
         elif value == 1:
             return True
         else:
-            raise Exception("Unexpected boolean value: ", value)
+            raise ValueError("Unexpected boolean value: ", value)
 
     def to_bytes(self) -> bytes:
         return self._read(self.uleb128())
@@ -125,7 +125,7 @@ class Deserializer:
             shift += 7
 
         if value > MAX_U32:
-            raise Exception("Unexpectedly large uleb128 value")
+            raise ValueError("Unexpectedly large uleb128 value")
 
         return value
 
@@ -136,7 +136,7 @@ class Deserializer:
             error = (
                 f"Unexpected end of input. Requested: {length}, found: {actual_length}"
             )
-            raise Exception(error)
+            raise ValueError(error)
         return value
 
     def _read_int(self, length: int) -> int:

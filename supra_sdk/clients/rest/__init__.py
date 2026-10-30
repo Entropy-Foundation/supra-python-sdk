@@ -8,9 +8,11 @@ from supra_sdk.clients.rest.supra_client import (
     TransactionFailedError,
     TransactionWaitTimeoutReachedError,
 )
+from supra_sdk.clients.rest.transaction_defaults import MaxGasEstimationError
 
 __all__ = [
     "FaucetRequestNotAcceptedError",
+    "MaxGasEstimationError",
     "SupraClient",
     "SupraClientConfig",
     "TransactionFailedError",

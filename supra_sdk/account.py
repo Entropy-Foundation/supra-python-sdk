@@ -4,7 +4,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import tempfile
 
 from supra_sdk import asymmetric_crypto, ed25519
 from supra_sdk.account_address import AccountAddress
@@ -55,12 +58,36 @@ class Account:
         )
 
     def store(self, path: str):
+        """Writes the address and the private key to `path` as JSON.
+
+        The private key is stored unencrypted. The file is created readable and
+        writable only by its owner (mode 0600). An existing file at `path` is
+        replaced, not modified in place, so the result is 0600 whatever the old
+        file's mode or owner was. The replacement is atomic: the data is written
+        to a temporary file in the same directory and renamed over `path`, so a
+        crash or a full disk does not leave a partial or empty file, and a
+        failed write leaves any existing file intact. On Windows the mode is not
+        applied and the file inherits the directory's access control. Read the
+        file back with `Account.load`.
+        """
         data = {
             "account_address": str(self.account_address),
-            "private_key": str(self.private_key),
+            "private_key": self.private_key.hex(),
         }
-        with open(path, "w") as file:
-            json.dump(data, file)
+        directory = os.path.dirname(os.path.abspath(path))
+        fd, temp_path = tempfile.mkstemp(
+            dir=directory, prefix=".account-", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w") as file:
+                json.dump(data, file)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temp_path, path)
+        except BaseException:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(temp_path)
+            raise
 
     def address(self) -> AccountAddress:
         """Returns the address associated with the given account"""
