@@ -633,7 +633,7 @@ class SignedTransaction:
         if isinstance(authenticator, AccountAuthenticator):
             if (
                 authenticator.variant == AccountAuthenticator.ED25519
-                or authenticator == AccountAuthenticator.MULTI_ED25519
+                or authenticator.variant == AccountAuthenticator.MULTI_ED25519
             ):
                 authenticator = Authenticator(authenticator.authenticator)
             else:
