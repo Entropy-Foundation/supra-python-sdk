@@ -323,7 +323,7 @@ class ScriptArgument:
     value: Any
 
     def __init__(self, variant: int, value: Any):
-        if variant < 0 or variant > 5:
+        if variant < ScriptArgument.U8 or variant > ScriptArgument.U256:
             raise Exception("Invalid variant")
 
         self.variant = variant
