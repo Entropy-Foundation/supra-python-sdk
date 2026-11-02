@@ -209,11 +209,17 @@ class AccountRestClient(RestClient):
         before a migration to the fungible store is listed by `account_coin_transactions`, and after it here.
 
         Paging: pass the returned cursor as `PaginationWithOrder(start=cursor)` to read the next page. The cursor is
-        `None` when the node sent no `x-supra-cursor` header or an empty one, which ends the feed. A node of the v12
-        line omits the header at the end of the feed; a node at v11.7.0 always sends it, so against it a feed ends
-        with an empty page, and the cursor returned with that page is not `None`. A page filtered by
-        `transaction_type` can be empty and still carry a cursor. `"0"` is a valid cursor. An empty `start` is not
-        sent.
+        that of the last row the node read, whether or not it matched `transaction_type`, so a filtered page can be
+        empty and still carry a cursor, and an empty page does not end the walk. The end of the feed is signalled
+        differently by the two node lines:
+
+        - A v12 node omits the `x-supra-cursor` header when it read no row, and this method then returns `None`.
+        - A v11.7.0 node always sends the header, and sends `"0"` when it read no row, which is the end of the feed
+          (a page of rows that the filter removed carries the cursor of the last row read, not `"0"`).
+
+        Stop a walk, filtered or not, when the cursor is `None` or `"0"`. A cursor is a block timestamp in
+        microseconds combined with an execution index, so a row's cursor is not `"0"` in practice, although a v12
+        node documents `"0"` as a valid cursor. An empty `start` is not sent.
 
         Args:
             account_address (AccountAddress | str): Address of the account that owns the store, as an
@@ -222,8 +228,8 @@ class AccountRestClient(RestClient):
             metadata_address (AccountAddress | str): Address of the fungible asset's metadata object. Default to
                 `SUPRA_FA_METADATA_ADDRESS` (`0xa`).
             transaction_type (TransactionType | str | None): Keeps only transactions of this type (`auto`, `user`,
-                `meta`, `record` or, on v12 nodes, `settlement`). The node applies it after reading a page. Default to
-                None, which keeps every type.
+                `meta`, `record` or, on v12 nodes only, `settlement`), as a `TransactionType` or its string value.
+                The node applies it after reading a page. Default to None, which keeps every type.
             store_address (AccountAddress | str | None): Address of a fungible store to query instead of the primary
                 store derived from `account_address` and `metadata_address`, for example a store address read from
                 an event. When given, `account_address` and `metadata_address` are not used. Default to None.

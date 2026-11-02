@@ -24,14 +24,17 @@ address `0xa`). A Devnet created with SUPRA as a fungible asset from genesis fun
 Testnet and Mainnet accounts hold a `CoinStore` balance until they migrate it.
 
 - `account_supra_balance` / `account_coin_balance` read `0x1::coin::balance`: the `CoinStore` balance plus the paired
-  fungible asset balance, so the sum is the same in either form.
+  fungible asset balance, so the sum is the same in either form. The fungible asset part is included only while the
+  coin-to-fungible-asset migration feature is enabled and the coin has a paired fungible asset.
 - `account_fa_balance` reads the fungible store alone (`0x1::primary_fungible_store::balance`), and is 0 for an account
   that has only a `CoinStore` balance.
 - `transfer_fungible_asset` debits the sender's fungible store only. `transfer_supra_coin` moves SUPRA held in either form.
 - `migrate_coin_to_fungible_store` moves a `CoinStore` balance into the fungible store. It is meaningful only where a
   `CoinStore` exists, and cannot be undone.
 - `account_fa_transactions` lists the transactions of an account's primary fungible store, a page at a time. The
-  returned cursor is `None` at the end of the feed (a v11.7.0 node ends it with an empty page instead).
+  returned cursor is `None` at the end of the feed on a v12 node; a v11.7.0 node sends `"0"` instead. Stop when the
+  cursor is `None` or `"0"`, not on an empty page: a page filtered by `transaction_type` can be empty and still carry
+  a cursor to continue from.
 
 ```python
 balance = await client.account_fa_balance(alice.address())

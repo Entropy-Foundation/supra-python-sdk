@@ -105,6 +105,12 @@ class TestPrimaryStoreAddress(unittest.TestCase):
             expected_store(OWNER, OTHER_METADATA),
         )
 
+    def test_user_derived_object_address_matches_the_move_derivation(self):
+        self.assertEqual(
+            str(AccountAddress.for_user_derived_object(OWNER, OTHER_METADATA)),
+            expected_store(OWNER, OTHER_METADATA),
+        )
+
     def test_defaults_to_supra_and_accepts_strings(self):
         self.assertEqual(
             primary_store_address(OWNER),
@@ -230,6 +236,25 @@ class TestTransferFungibleAsset(FungibleAssetHelperTests):
             await client.transfer_fungible_asset(
                 self.sender(), RECIPIENT, 1, "zz", sequence_number=0
             )
+        self.assertEqual(node.requests, [])
+
+    async def test_recipient_accepts_a_hex_string(self):
+        node = FakeNode()
+        client = await self.make_client(node)
+        await client.transfer_fungible_asset(
+            self.sender(), str(RECIPIENT), 1, sequence_number=0
+        )
+        entry = node.submitted().transaction.payload.value
+        self.assertEqual(entry.args[1], RECIPIENT.address)
+
+    async def test_invalid_recipient_sends_nothing(self):
+        node = FakeNode()
+        client = await self.make_client(node)
+        for recipient in ("zz", 5):
+            with self.assertRaisesRegex(ValueError, "recipient"):
+                await client.transfer_fungible_asset(
+                    self.sender(), recipient, 1, sequence_number=0
+                )
         self.assertEqual(node.requests, [])
 
     async def test_failed_transfer_raises_with_the_hash(self):
@@ -367,12 +392,46 @@ class TestAccountFaTransactions(FungibleAssetHelperTests):
         starts = [r.url.params.get("start") for r in node.of("/fa_transactions")]
         self.assertEqual(starts, [None, "2"])
 
+    async def test_walk_of_a_v11_7_0_filtered_feed_ends_at_cursor_zero(self):
+        # A v11.7.0 node sends the cursor of the last row read even when the filter removed every row, and "0" when
+        # it read none. A walk that stopped on an empty page would end after the first page.
+        responses = [
+            self.page("10", []),
+            self.page("20", [{"n": 1}]),
+            self.page("0", []),
+        ]
+        node = FakeNode()
+        client = await self.make_client(node)
+        collected: list[dict] = []
+        cursor: str | None = None
+        for response in responses:
+            node.fa_transactions = response
+            pagination = PaginationWithOrder(start=cursor) if cursor else None
+            page, cursor = await client.account_fa_transactions(
+                OWNER, pagination, transaction_type=TransactionType.USER
+            )
+            collected.extend(page)
+            if cursor is None or cursor == "0":
+                break
+        self.assertEqual(cursor, "0")
+        self.assertEqual(collected, [{"n": 1}])
+        starts = [r.url.params.get("start") for r in node.of("/fa_transactions")]
+        self.assertEqual(starts, [None, "10", "20"])
+
     async def test_invalid_address_sends_nothing(self):
         node = FakeNode()
         client = await self.make_client(node)
         with self.assertRaises(ValueError):
             await client.account_fa_transactions("zz")
         self.assertEqual(node.requests, [])
+
+
+class TestTransactionType(unittest.TestCase):
+    def test_has_every_value_the_node_filter_accepts(self):
+        self.assertEqual(
+            {member.value for member in TransactionType},
+            {"auto", "user", "meta", "record", "settlement"},
+        )
 
 
 if __name__ == "__main__":

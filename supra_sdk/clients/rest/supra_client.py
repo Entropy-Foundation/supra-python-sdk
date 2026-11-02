@@ -11,7 +11,7 @@ from http import HTTPStatus
 from typing import Any
 
 from supra_sdk.account import Account
-from supra_sdk.account_address import AccountAddress
+from supra_sdk.account_address import AccountAddress, to_account_address
 from supra_sdk.authenticator import (
     Authenticator,
     FeePayerAuthenticator,
@@ -38,7 +38,6 @@ from supra_sdk.clients.rest.transaction_defaults import (
 from supra_sdk.fungible_asset import (
     FUNGIBLE_ASSET_METADATA_TYPE,
     SUPRA_FA_METADATA_ADDRESS,
-    to_account_address,
 )
 from supra_sdk.transactions import (
     AutomationRegistrationParams,
@@ -1074,7 +1073,7 @@ class SupraClient(
     async def transfer_fungible_asset(
         self,
         sender: Account,
-        recipient: AccountAddress,
+        recipient: AccountAddress | str,
         amount: int,
         metadata_address: AccountAddress | str = SUPRA_FA_METADATA_ADDRESS,
         sequence_number: int | None = None,
@@ -1096,7 +1095,7 @@ class SupraClient(
 
         Args:
             sender (Account): Sender account.
-            recipient (AccountAddress): Recipient account address.
+            recipient (AccountAddress | str): Recipient account address, as an `AccountAddress` or a hex string.
             amount (int): The amount to transfer, in the asset's smallest unit (quants for SUPRA).
             metadata_address (AccountAddress | str): Address of the fungible asset's metadata object. Default to
                 `SUPRA_FA_METADATA_ADDRESS` (`0xa`, SUPRA).
@@ -1109,7 +1108,7 @@ class SupraClient(
             str: Transaction hash.
 
         Raises:
-            ValueError: If `metadata_address` is not a valid account address.
+            ValueError: If `recipient` or `metadata_address` is not a valid account address.
             TransactionFailedError: If waiting is enabled and the final status is not `Success`.
             TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
 
@@ -1119,7 +1118,9 @@ class SupraClient(
                 to_account_address(metadata_address, "metadata_address"),
                 Serializer.struct,
             ),
-            TransactionArgument(recipient, Serializer.struct),
+            TransactionArgument(
+                to_account_address(recipient, "recipient"), Serializer.struct
+            ),
             TransactionArgument(amount, Serializer.u64),
         ]
         transaction_payload = EntryFunction.natural(
@@ -1155,6 +1156,13 @@ class SupraClient(
         migrated. On a Devnet whose SUPRA is held as a fungible asset from genesis there is no `CoinStore` to move,
         and the transaction changes no balance but still costs gas. The transaction aborts when the framework's
         coin-to-fungible-asset migration feature is not enabled. The migration cannot be undone.
+
+        For a `coin_type` other than SUPRA, the framework (`0x1::coin::migrate_to_fungible_store`) creates the
+        paired fungible asset metadata object of the coin if none exists yet, and aborts when the coin type is not
+        initialized. For any coin type, including SUPRA, it creates the account's primary store of the paired fungible
+        asset if it does not exist and writes a `MigrationFlag` at that store, even when the account has no
+        `CoinStore`; in that case no balance moves. For SUPRA the paired fungible asset must already exist, as the
+        framework does not create it here and aborts otherwise.
 
         Args:
             sender (Account): The account whose balance is migrated.
