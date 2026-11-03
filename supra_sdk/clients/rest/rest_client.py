@@ -1,7 +1,12 @@
 # Copyright © Supra
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Any
+
+import httpx
+
 from supra_sdk.clients import ApiClient
+from supra_sdk.clients.api_client import UnexpectedResponseError
 
 
 class RestClient:
@@ -25,3 +30,19 @@ class RestClient:
 
         """
         self.api_client = api_client
+
+    @staticmethod
+    def _response_field(response: httpx.Response, field: str) -> Any:
+        """Returns `field` of the JSON object in the body of `response`.
+
+        Raises:
+            UnexpectedResponseError: If the body is not a JSON object with `field`.
+
+        """
+        try:
+            data = response.json()
+        except ValueError:
+            raise UnexpectedResponseError(field, response) from None
+        if not isinstance(data, dict) or field not in data:
+            raise UnexpectedResponseError(field, response)
+        return data[field]

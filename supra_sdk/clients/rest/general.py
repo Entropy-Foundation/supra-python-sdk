@@ -49,16 +49,19 @@ class GeneralRestClient(RestClient):
         Returns:
             list[Any]: Execution results of the view function.
 
+        Raises:
+            UnexpectedResponseError: If the node answers 200 with a body that has no `result` field.
+
         """
         data = {
             "function": function,
             "type_arguments": type_arguments,
             "arguments": arguments,
         }
-        res_data = (
-            await self.api_client.post(endpoint=VIEW_FUNCTION_ENDPOINT, data=data)
-        ).json()
-        return res_data["result"]
+        response = await self.api_client.post(
+            endpoint=VIEW_FUNCTION_ENDPOINT, data=data
+        )
+        return self._response_field(response, "result")
 
     async def get_table_item(
         self,

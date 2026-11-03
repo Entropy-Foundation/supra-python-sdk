@@ -223,6 +223,8 @@ class SupraClient(
         api_client_config = ApiClientConfig(
             http2=supra_client_config.http2,
             access_token=supra_client_config.access_token,
+            timeout=supra_client_config.timeout,
+            retry=supra_client_config.retry,
         )
         super().__init__(ApiClient(base_url, api_client_config))
 
@@ -391,7 +393,7 @@ class SupraClient(
         may still succeed later, e.g. because its sequence number is too new), a missing status or an unknown one.
         A 404 whose body is the node's "transaction not found" message (a JSON object with a `message` starting
         "Information not available for" or containing "Cannot find transaction") means "not seen yet" and polling
-        continues; any other 404, such as a wrong base URL or a missing route, is raised as `ApiError`. The final
+        continues; any other 404, such as a wrong base URL or a missing route, is raised as `ApiNotFoundError`. The final
         data is returned whatever the status is, so the caller must check `status`.
 
         The wait never starts a poll after `TransactionConfig.transaction_wait_time_in_seconds` has passed, bounds each
@@ -1163,7 +1165,7 @@ def _is_transaction_not_found(error: ApiError) -> bool:
     if error.status_code != HTTPStatus.NOT_FOUND:
         return False
     try:
-        message = json.loads(error.message).get("message")
+        message = json.loads(error.body).get("message")
     except (ValueError, AttributeError):
         return False
     return isinstance(message, str) and any(
