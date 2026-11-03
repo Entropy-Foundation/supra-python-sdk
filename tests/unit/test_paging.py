@@ -554,6 +554,12 @@ class TypedAscendingFeedTests(unittest.IsolatedAsyncioTestCase):
             ([], "0"),
         )
 
+    async def test_an_empty_filter_is_not_sent_and_zero_ends_the_feed(self):
+        items = await self.feed({None: page([], "0")}, "")
+        self.assertEqual(items, [])
+        self.assertEqual(self.sent(), [None])
+        self.assertEqual(self.node.params(0), {"ascending": "true"})
+
 
 class AccountHistoryTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
@@ -624,12 +630,12 @@ class AccountHistoryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_iterator_pages_past_an_empty_page_and_the_zero_cursor(self):
         # The node filters by category while it scans: a page can be empty and carry a cursor, and "0" is the
-        # cursor of a genesis-block row.
+        # cursor of a genesis-block row. Ascending, the first scan reads only that row, which the filter excludes.
         pages = {
-            None: page([1], "9"),
-            "9": page([], "4"),
-            "4": page([], "0"),
-            "0": page([2], None),
+            None: page([], "0"),
+            "0": page([1], "9"),
+            "9": page([], "14"),
+            "14": page([2], None),
         }
         self.node = await FakeNode.create(
             lambda request: pages[request.url.params.get("start")]
@@ -637,15 +643,19 @@ class AccountHistoryTests(unittest.IsolatedAsyncioTestCase):
         items = await collect(
             self.node.client.iter_account_history(
                 ADDRESS,
-                PaginationWithOrder(count=1),
+                PaginationWithOrder(count=1, ascending=True),
                 (category for category in ["fa", "sent"]),
             )
         )
         self.assertEqual(items, [1, 2])
         self.assertEqual(len(self.node.requests), 4)
-        self.assertEqual(self.node.params(0), {"count": "1", "categories": "fa,sent"})
         self.assertEqual(
-            self.node.params(3), {"count": "1", "start": "0", "categories": "fa,sent"}
+            self.node.params(0),
+            {"count": "1", "ascending": "true", "categories": "fa,sent"},
+        )
+        self.assertEqual(
+            self.node.params(1),
+            {"count": "1", "start": "0", "ascending": "true", "categories": "fa,sent"},
         )
 
     async def test_iterator_stops_when_a_cursor_repeats(self):

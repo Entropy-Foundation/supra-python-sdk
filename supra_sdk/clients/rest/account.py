@@ -236,28 +236,33 @@ class AccountRestClient(RestClient):
                 `meta`, `record` or, on v12 nodes only, `settlement`), as a `TransactionType` or its string value.
                 It is sent as the node's `type` query parameter; a v11.7.x node rejects `settlement` with HTTP 400.
                 The node applies it after reading a page, so a filtered page can be empty and still carry a cursor.
-                Default to None, which keeps every type.
+                Default to None, which keeps every type; an empty string is not sent and also keeps every type.
 
         Returns:
             tuple[list[dict[str, Any]], str | None]: A tuple containing,
                 - list[dict[str, Any]]: Details of finalized coin deposit/withdraw type transactions associated with a
-                    given account. On a chain created with features 64 and 65 on, such as Devnet, no account has a
-                    `CoinStore<SupraCoin>`, so the list holds none of an account's SUPRA movements;
-                    `account_history` with the category `fa` lists them too, on nodes from `supra_node_v12.0.0`.
+                    given account. While feature 64 or 65 is enabled, registering SUPRA creates the account's primary
+                    fungible store instead of a `CoinStore<SupraCoin>`, so new accounts, and accounts that migrated
+                    their SUPRA, hold SUPRA in their primary store and the list holds none of its movements. On a
+                    chain created with those features on, such as Devnet, no account has a `CoinStore<SupraCoin>`.
+                    `account_history` with the category `fa` lists those movements too, on nodes from
+                    `supra_node_v12.0.0`.
                 - str | None: Cursor to retrieve the next page, or `None` when the feed has ended. Nodes up to
-                    v11.7.x end this feed with the cursor `0` on an empty page; that is reported as `None` too. An
-                    empty page carrying a cursor other than `0` and the request's own does not end the feed. The
-                    exception is the first request (no `start`) of an ascending read with a `transaction_type`:
-                    block 0 has timestamp 0, so `0` can be the position of a genesis row that the filter excluded,
-                    and `0` is returned. If the feed has no further rows the node answers the request with
-                    `start=0` with `0` again, which ends the feed.
+                    v11.7.x end this feed with the cursor `0` on an empty page; that is reported as `None` too,
+                    except for the first request (no `start`) of an ascending read with a `transaction_type`: block 0
+                    has timestamp 0, so `0` can be the position of a genesis row that the filter excluded, and `0` is
+                    returned. The node answers the request with `start=0` that follows with `0` again (v11.7.x) or
+                    without a cursor (v12) when the feed has no further rows; both end the feed. An empty page
+                    carrying a cursor other than `0` and the request's own does not end the feed.
 
         """
         endpoint = format_endpoint(
             ACCOUNT_COIN_TRANSACTIONS_ENDPOINT, account_address=account_address
         )
         params = pagination.to_params() if pagination else {}
-        if transaction_type is not None:
+        # An empty `transaction_type` is not a type, so, like an empty `start`, it is not sent.
+        filtered = transaction_type is not None and transaction_type != ""
+        if filtered:
             params["type"] = str(
                 transaction_type.value
                 if isinstance(transaction_type, TransactionType)
@@ -272,7 +277,7 @@ class AccountRestClient(RestClient):
             sent is None
             and pagination is not None
             and pagination.ascending is True
-            and transaction_type is not None
+            and filtered
         )
         return page, next_cursor(
             response, page, sent=sent, zero_continues=zero_continues
@@ -290,10 +295,10 @@ class AccountRestClient(RestClient):
         The iteration ends when the node sends no next cursor or repeats one (see
         `supra_sdk.clients.rest.paging.next_cursor`). An empty page with a new cursor does not end it.
 
-        It does not list SUPRA held in primary fungible stores, which is how every account holds SUPRA on a chain
-        created with features 64 and 65 on, such as Devnet; see `account_coin_transactions`. Use
-        `account_fa_transactions`, or `iter_account_history` with the category `fa` on nodes from
-        `supra_node_v12.0.0`, for those.
+        It does not list SUPRA held in primary fungible stores: that of every account on a chain created with
+        features 64 and 65 on, such as Devnet, and, while feature 64 or 65 is enabled, that of new accounts and of
+        accounts that migrated their SUPRA; see `account_coin_transactions`. Use `account_fa_transactions`, or
+        `iter_account_history` with the category `fa` on nodes from `supra_node_v12.0.0`, for those.
 
         Args:
             account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.
@@ -386,7 +391,8 @@ class AccountRestClient(RestClient):
         Automated transactions and automation registry records are not listed; use
         `account_automated_transactions` for those. While the node sends the `x-supra-history-indexed-from` response
         header, the history does not cover the blocks below the height it names: the node is indexing, or has not
-        indexed, the blocks it held before it kept the history.
+        indexed, the blocks it held before it kept the history. This method does not return that header, so a caller
+        cannot tell from its result whether the history covers the older blocks.
 
         Paging: the node applies `categories` while it scans the account's history and reads at most 8 rows for
         each entry requested, so a page can hold fewer entries than `count`, or none, before the history is
@@ -410,7 +416,8 @@ class AccountRestClient(RestClient):
             tuple[list[dict[str, Any]], str | None]: A tuple containing,
                 - list[dict[str, Any]]: The entries, each `{"categories": [...], "transaction": {...}}`, where
                     `categories` lists the categories the transaction matched for the account, in the order `sent`,
-                    `coin`, `fa`, `da`, and `transaction` has the shape of a transaction in a block.
+                    `coin`, `fa`, `da`, and `transaction` is a `TransactionV3`, tagged by `txn_type`, as
+                    `account_coin_transactions` returns it.
                 - str | None: Cursor to retrieve the next page, or `None` when the history has ended.
 
         Raises:
