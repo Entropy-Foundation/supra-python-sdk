@@ -1,0 +1,56 @@
+name: Examples on Devnet
+
+# Runs every example in `examples/` against Devnet with `make examples`. The examples fund the accounts they generate
+# from the account of the repository secret SUPRA_EXAMPLES_PRIVATE_KEY (an Ed25519 private key, 32 bytes as hex, of an
+# account funded on Devnet). Without the secret the job skips the examples and reports a notice.
+
+on:
+  schedule:
+    - cron: "41 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Two runs sending transactions from the same account at once would race for its sequence numbers.
+concurrency:
+  group: examples-devnet
+  cancel-in-progress: false
+
+jobs:
+  examples:
+    name: Examples on Devnet
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HAS_FUNDED_KEY: ${{ secrets.SUPRA_EXAMPLES_PRIVATE_KEY != '' }}
+      SUPRA_RPC_NODE_URL: https://rpc-devnet.supra.com
+      UV_PYTHON: "3.12"
+
+    steps:
+      - name: Skip without a funded key
+        if: env.HAS_FUNDED_KEY != 'true'
+        run: echo "::notice title=Examples skipped::The repository secret SUPRA_EXAMPLES_PRIVATE_KEY is not set, so no example ran."
+
+      - name: Checkout code
+        if: env.HAS_FUNDED_KEY == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        if: env.HAS_FUNDED_KEY == 'true'
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        if: env.HAS_FUNDED_KEY == 'true'
+        run: uv sync --locked
+
+      # The key is visible to this step only, not to the dependency installation above.
+      - name: Run the examples
+        if: env.HAS_FUNDED_KEY == 'true'
+        env:
+          SUPRA_EXAMPLES_PRIVATE_KEY: ${{ secrets.SUPRA_EXAMPLES_PRIVATE_KEY }}
+        run: make examples
