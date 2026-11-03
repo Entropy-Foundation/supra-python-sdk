@@ -1099,6 +1099,9 @@ class SupraClient(
     ) -> str | None:
         """Requests faucet funds to be sent to the given account address.
 
+        The faucet does not accept the request when the node answers `"TryLater"` (no faucet account was free to fund
+        it); the request can be sent again later. The request is sent once, whatever `ApiClientConfig.retry` says.
+
         Args:
             address (AccountAddress | str): The target account address to receive funds, as an `AccountAddress` or a
                 hex string.
@@ -1109,6 +1112,10 @@ class SupraClient(
 
         Raises:
             FaucetRequestNotAcceptedError: If waiting is requested and the faucet did not accept the request.
+            ApiRateLimitError: If the address is inside the cooldown after its last grant or has reached the daily
+                number of grants (429).
+            UnexpectedResponseError: If the node answers 200 with a body that is neither a JSON object nor
+                `"TryLater"`.
             TransactionFailedError: If waiting is requested and the final status of the faucet transaction is not
                 `Success`.
             TransactionWaitTimeoutReachedError: If waiting is requested and the faucet transaction is not final within
