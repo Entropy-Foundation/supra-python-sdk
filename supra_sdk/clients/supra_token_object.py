@@ -357,8 +357,8 @@ class SupraTokenObjectClient:
     async def read_object(self, address: AccountAddress) -> ReadObject:
         """Reads the object resources this class knows how to parse from the given address.
 
-        Follows the node's cursor until the feed ends, which is at the first empty page or the first response without
-        a cursor, so an address with no resources takes one request.
+        Follows the node's cursor through `iter_account_resources` until the feed ends. For an address with no
+        resources the node sends no cursor, so that takes one request.
 
         Args:
             address (AccountAddress): Address of the object.

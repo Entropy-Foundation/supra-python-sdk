@@ -93,7 +93,7 @@ class AccountRestClient(RestClient):
         params = pagination.to_params() if pagination else {}
         response = await self.api_client.get(endpoint=endpoint, params=params)
         page = response.json()
-        return page, next_cursor(response, page)
+        return page, next_cursor(response, page, sent=params.get("start"))
 
     def iter_account_resources(
         self,
@@ -102,7 +102,8 @@ class AccountRestClient(RestClient):
     ) -> AsyncIterator[dict[str, Any]]:
         """Iterates over all resources of a given account, requesting further pages until the feed ends.
 
-        The iteration stops at the first empty page or the first response without a cursor.
+        The iteration ends when the node sends no next cursor or repeats one (see
+        `supra_sdk.clients.rest.paging.next_cursor`). An empty page with a new cursor does not end it.
 
         Args:
             account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.
@@ -164,7 +165,7 @@ class AccountRestClient(RestClient):
         params = pagination.to_params() if pagination else {}
         response = await self.api_client.get(endpoint=endpoint, params=params)
         page = response.json()
-        return page, next_cursor(response, page)
+        return page, next_cursor(response, page, sent=params.get("start"))
 
     def iter_account_modules(
         self,
@@ -173,7 +174,8 @@ class AccountRestClient(RestClient):
     ) -> AsyncIterator[dict[str, Any]]:
         """Iterates over all modules of a given account, requesting further pages until the feed ends.
 
-        The iteration stops at the first empty page or the first response without a cursor.
+        The iteration ends when the node sends no next cursor or repeats one (see
+        `supra_sdk.clients.rest.paging.next_cursor`). An empty page with a new cursor does not end it.
 
         Args:
             account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.
@@ -228,7 +230,8 @@ class AccountRestClient(RestClient):
                 - list[dict[str, Any]]: Details of finalized coin deposit/withdraw type transactions associated with a
                     given account.
                 - str | None: Cursor to retrieve the next page, or `None` when the feed has ended. Nodes up to
-                    v11.7.x end this feed with the cursor `0` on an empty page; that is reported as `None` too.
+                    v11.7.x end this feed with the cursor `0` on an empty page; that is reported as `None` too. An
+                    empty page carrying a cursor other than `0` and the request's own does not end the feed.
 
         """
         endpoint = format_endpoint(
@@ -237,7 +240,8 @@ class AccountRestClient(RestClient):
         params = pagination.to_params() if pagination else {}
         response = await self.api_client.get(endpoint=endpoint, params=params)
         page = response.json()
-        return page, next_cursor(response, page, zero_ends_empty_page=True)
+        # The request carries no `type` filter, so `"0"` on an empty page is the end of the feed on both node lines.
+        return page, next_cursor(response, page, sent=params.get("start"))
 
     def iter_account_coin_transactions(
         self,
@@ -247,7 +251,8 @@ class AccountRestClient(RestClient):
         """Iterates over all coin deposit/withdraw type transactions of a given account, requesting further pages
         until the feed ends.
 
-        The iteration stops at the first empty page or the first response without a cursor.
+        The iteration ends when the node sends no next cursor or repeats one (see
+        `supra_sdk.clients.rest.paging.next_cursor`). An empty page with a new cursor does not end it.
 
         Args:
             account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.
@@ -290,7 +295,7 @@ class AccountRestClient(RestClient):
         params = pagination.to_params() if pagination else {}
         response = await self.api_client.get(endpoint=endpoint, params=params)
         page = response.json()
-        return page, next_cursor(response, page)
+        return page, next_cursor(response, page, sent=params.get("cursor"))
 
     def iter_account_automated_transactions(
         self,
@@ -299,7 +304,8 @@ class AccountRestClient(RestClient):
     ) -> AsyncIterator[dict[str, Any]]:
         """Iterates over all automated transactions of a given account, requesting further pages until the feed ends.
 
-        The iteration stops at the first empty page or the first response without a cursor.
+        The iteration ends when the node sends no next cursor or repeats one (see
+        `supra_sdk.clients.rest.paging.next_cursor`). An empty page with a new cursor does not end it.
 
         Args:
             account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.

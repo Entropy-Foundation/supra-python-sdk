@@ -3,13 +3,14 @@
 
 import unittest
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 import httpx
 
 from supra_sdk.account_address import AccountAddress
 from supra_sdk.clients import ApiClient
-from supra_sdk.clients.rest.paging import next_cursor
+from supra_sdk.clients.rest.paging import next_cursor, paginate
 from supra_sdk.clients.rest.rest_types import (
     AutomatedTransactionsPagination,
     EventsPagination,
@@ -20,7 +21,7 @@ from supra_sdk.clients.rest.supra_client import SupraClient
 from supra_sdk.clients.supra_token_object import SupraTokenObjectClient
 
 ADDRESS = AccountAddress.from_str("0x1")
-EVENT_TYPE = "0x1::coin::CoinDeposit"
+EVENT_TYPE = "0x1::fungible_asset::Deposit"
 CURSOR = "x-supra-cursor"
 
 Handler = Callable[[httpx.Request], httpx.Response]
@@ -83,14 +84,46 @@ class NextCursorTests(unittest.TestCase):
     def test_present_header_is_returned(self):
         self.assertEqual(next_cursor(self.response({CURSOR: "abc"}), [1]), "abc")
 
-    def test_zero_is_a_cursor_unless_asked_otherwise(self):
-        self.assertEqual(next_cursor(self.response({CURSOR: "0"}), []), "0")
+    def test_absent_or_empty_header_ends_an_empty_page_too(self):
+        self.assertIsNone(next_cursor(self.response({}), [], sent="c1"))
+        self.assertIsNone(next_cursor(self.response({CURSOR: ""}), []))
+        self.assertIsNone(
+            next_cursor(self.response({}), [], sent=None, zero_continues=True)
+        )
+
+    def test_empty_page_with_a_new_cursor_continues(self):
+        response = self.response({CURSOR: "1792406658389090"})
+        self.assertEqual(
+            next_cursor(response, [], sent="1792406658389084"), "1792406658389090"
+        )
+        self.assertEqual(next_cursor(response, []), "1792406658389090")
+
+    def test_zero_on_an_empty_page_ends_the_feed(self):
+        response = self.response({CURSOR: "0"})
+        self.assertIsNone(next_cursor(response, []))
+        self.assertIsNone(next_cursor(response, [], sent="1792406658389084"))
+
+    def test_zero_on_a_page_with_items_continues(self):
         self.assertEqual(next_cursor(self.response({CURSOR: "0"}), [1]), "0")
 
-    def test_zero_on_empty_page_ends_the_feed_when_asked(self):
+    def test_zero_on_an_empty_page_continues_when_zero_continues(self):
         response = self.response({CURSOR: "0"})
-        self.assertIsNone(next_cursor(response, [], zero_ends_empty_page=True))
-        self.assertEqual(next_cursor(response, [1], zero_ends_empty_page=True), "0")
+        self.assertEqual(next_cursor(response, [], zero_continues=True), "0")
+        self.assertEqual(
+            next_cursor(self.response({CURSOR: "5"}), [], zero_continues=True), "5"
+        )
+
+    def test_echo_of_the_sent_cursor_on_an_empty_page_ends_the_feed(self):
+        self.assertIsNone(next_cursor(self.response({CURSOR: "abcd"}), [], sent="abcd"))
+        self.assertIsNone(next_cursor(self.response({CURSOR: "0"}), [], sent=0))
+
+    def test_echo_of_the_sent_cursor_on_a_page_with_items_continues(self):
+        self.assertEqual(
+            next_cursor(self.response({CURSOR: "abcd"}), [1], sent="abcd"), "abcd"
+        )
+
+    def test_empty_sent_cursor_counts_as_none(self):
+        self.assertEqual(next_cursor(self.response({CURSOR: "c"}), [], sent=""), "c")
 
 
 class CursorReturnTests(unittest.IsolatedAsyncioTestCase):
@@ -160,9 +193,53 @@ class CursorReturnTests(unittest.IsolatedAsyncioTestCase):
             await self.client.account_coin_transactions(ADDRESS), ([{"n": 1}], "0")
         )
 
-    async def test_zero_cursor_is_not_special_on_other_feeds(self):
+    async def test_zero_cursor_on_an_empty_page_ends_every_feed(self):
         self.response = page([], "0")
-        self.assertEqual(await self.client.account_resources(ADDRESS), ([], "0"))
+        self.assertEqual(await self.client.account_resources(ADDRESS), ([], None))
+        self.assertEqual(await self.client.account_modules(ADDRESS), ([], None))
+        self.assertEqual(
+            await self.client.account_automated_transactions(ADDRESS), ([], None)
+        )
+        self.response = page([], "0", wrap=True)
+        self.assertEqual(await self.client.events_by_type(EVENT_TYPE), ([], None))
+
+    async def test_echo_of_the_sent_cursor_on_an_empty_page_is_the_end(self):
+        self.response = page([], "c1")
+        self.assertEqual(
+            await self.client.account_resources(ADDRESS, Pagination(start="c1")),
+            ([], None),
+        )
+        self.assertEqual(
+            await self.client.account_coin_transactions(
+                ADDRESS, PaginationWithOrder(start="c1")
+            ),
+            ([], None),
+        )
+        self.assertEqual(
+            await self.client.account_automated_transactions(
+                ADDRESS, AutomatedTransactionsPagination(cursor="c1")
+            ),
+            ([], None),
+        )
+        self.response = page([], "c1", wrap=True)
+        self.assertEqual(
+            await self.client.events_by_type(EVENT_TYPE, EventsPagination(start="c1")),
+            ([], None),
+        )
+
+    async def test_empty_page_with_a_new_cursor_is_returned(self):
+        self.response = page([], "c2")
+        self.assertEqual(
+            await self.client.account_coin_transactions(
+                ADDRESS, PaginationWithOrder(start="c1")
+            ),
+            ([], "c2"),
+        )
+        self.response = page([], "c2", wrap=True)
+        self.assertEqual(
+            await self.client.events_by_type(EVENT_TYPE, EventsPagination(start="c1")),
+            ([], "c2"),
+        )
 
 
 class IteratorTests(unittest.IsolatedAsyncioTestCase):
@@ -318,10 +395,107 @@ class IteratorTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotEqual(request.url.params.get(name), "")
         self.assertEqual(len(self.node.requests), 3)
 
+    async def test_an_empty_page_with_a_new_cursor_does_not_end_the_iteration(self):
+        # A filter can exclude every row a page read; the page is empty and the cursor moves on.
+        pages = {
+            None: page([1], "c1", wrap=True),
+            "c1": page([], "c2", wrap=True),
+            "c2": page([2], None, wrap=True),
+        }
+        self.node = await FakeNode.create(
+            lambda request: pages[request.url.params.get("start")]
+        )
+        items = await collect(self.node.client.iter_events_by_type(EVENT_TYPE))
+        self.assertEqual(items, [1, 2])
+        self.assertEqual(len(self.node.requests), 3)
+
+    async def test_an_empty_coin_transactions_page_with_a_new_cursor_continues(self):
+        pages = {
+            None: page([1], "100"),
+            "100": page([], "90"),
+            "90": page([2], "80"),
+            "80": page([], "0"),
+        }
+        self.node = await FakeNode.create(
+            lambda request: pages[request.url.params.get("start")]
+        )
+        items = await collect(self.node.client.iter_account_coin_transactions(ADDRESS))
+        self.assertEqual(items, [1, 2])
+        self.assertEqual(len(self.node.requests), 4)
+
+    async def test_zero_on_a_page_with_items_continues_the_iteration(self):
+        # Block 0 has timestamp 0, so a genesis row's cursor is 0.
+        pages = {
+            None: page([1], "0"),
+            "0": page([2], "5"),
+            "5": page([], None),
+        }
+        self.node = await FakeNode.create(
+            lambda request: pages[request.url.params.get("start")]
+        )
+        items = await collect(
+            self.node.client.iter_account_coin_transactions(
+                ADDRESS, PaginationWithOrder(ascending=True)
+            )
+        )
+        self.assertEqual(items, [1, 2])
+        self.assertEqual(self.node.params(1), {"start": "0", "ascending": "true"})
+
+    async def test_a_missing_header_ends_the_iteration_on_an_empty_page(self):
+        self.node = await FakeNode.create(lambda _: page([], None))
+        items = await collect(
+            self.node.client.iter_account_automated_transactions(ADDRESS)
+        )
+        self.assertEqual(items, [])
+        self.assertEqual(len(self.node.requests), 1)
+
     async def test_iterator_is_lazy(self):
         self.node = await FakeNode.create(lambda _: page([1], "c"))
         self.node.client.iter_account_resources(ADDRESS)
         self.assertEqual(self.node.requests, [])
+
+
+class TypedAscendingFeedTests(unittest.IsolatedAsyncioTestCase):
+    """`paginate` over a feed read in ascending order with a `type` filter, where `"0"` on the first empty page can
+    be a genesis row's position. No feed on this client takes a `type` filter yet; the fetch is built the way such a
+    feed would use `next_cursor`."""
+
+    def feed(self, responses: dict[str | None, httpx.Response]):
+        self.sent: list[str | None] = []
+
+        async def fetch(p: PaginationWithOrder) -> tuple[list[Any], str | None]:
+            self.sent.append(p.start)
+            response = responses[p.start]
+            items = response.json()
+            zero_continues = p.start is None and p.ascending is True
+            return items, next_cursor(
+                response, items, sent=p.start, zero_continues=zero_continues
+            )
+
+        return paginate(
+            fetch,
+            PaginationWithOrder(ascending=True),
+            lambda p, cursor: replace(p, start=cursor),
+        )
+
+    async def test_zero_continues_once_and_its_echo_ends_the_feed(self):
+        items = await collect(self.feed({None: page([], "0"), "0": page([], "0")}))
+        self.assertEqual(items, [])
+        self.assertEqual(self.sent, [None, "0"])
+
+    async def test_zero_continues_to_the_rows_after_a_genesis_row(self):
+        items = await collect(
+            self.feed(
+                {None: page([], "0"), "0": page([1, 2], "7"), "7": page([], None)}
+            )
+        )
+        self.assertEqual(items, [1, 2])
+        self.assertEqual(self.sent, [None, "0", "7"])
+
+    async def test_zero_on_a_later_empty_page_ends_the_feed(self):
+        items = await collect(self.feed({None: page([1], "7"), "7": page([], "0")}))
+        self.assertEqual(items, [1])
+        self.assertEqual(self.sent, [None, "7"])
 
 
 class ReadObjectTests(unittest.IsolatedAsyncioTestCase):
@@ -335,10 +509,12 @@ class ReadObjectTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.node.requests), 1)
         self.assertEqual(self.node.params(0), {"count": "100"})
 
-    async def test_address_without_resources_on_a_node_that_echoes_a_cursor(self):
+    async def test_empty_pages_end_when_the_node_echoes_the_cursor(self):
+        # An empty page with a cursor continues once; the node's echo of that cursor then ends the feed.
         self.node = await FakeNode.create(lambda _: page([], "c"))
         await SupraTokenObjectClient(self.node.client).read_object(ADDRESS)
-        self.assertEqual(len(self.node.requests), 1)
+        self.assertEqual(len(self.node.requests), 2)
+        self.assertEqual(self.node.params(1), {"count": "100", "start": "c"})
 
     async def test_follows_the_cursor_and_stops_on_a_missing_one(self):
         resource = {

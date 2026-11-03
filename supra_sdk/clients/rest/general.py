@@ -97,7 +97,11 @@ class GeneralRestClient(RestClient):
         """Retrieves events of a given type.
 
         Args:
-            event_type (str): The fully qualified name of the event struct e.g. '0x1::coin::CoinDeposit'.
+            event_type (str): The fully qualified name of the event struct, e.g. '0x1::fungible_asset::Deposit'.
+                The `store` field of a `0x1::fungible_asset::Deposit` event names the fungible store the asset was
+                deposited to, not the account that owns it. On a chain where SUPRA is held in primary fungible
+                stores (Devnet), SUPRA transfers emit `0x1::fungible_asset::Deposit` and `Withdraw` events and no
+                `0x1::coin` events.
             pagination (EventsPagination | None): Pagination options. Default to None.
 
         Returns:
@@ -110,17 +114,22 @@ class GeneralRestClient(RestClient):
         params = pagination.to_params() if pagination else {}
         response = await self.api_client.get(endpoint=endpoint, params=params)
         events = response.json()["data"]
-        return events, next_cursor(response, events)
+        return events, next_cursor(response, events, sent=params.get("start"))
 
     def iter_events_by_type(
         self, event_type: str, pagination: EventsPagination | None = None
     ) -> AsyncIterator[dict[str, Any]]:
         """Iterates over all events of a given type, requesting further pages until the feed ends.
 
-        The iteration stops at the first empty page or the first response without a cursor.
+        The iteration ends when the node sends no next cursor or repeats one (see
+        `supra_sdk.clients.rest.paging.next_cursor`). An empty page with a new cursor does not end it.
 
         Args:
-            event_type (str): The fully qualified name of the event struct e.g. '0x1::coin::CoinDeposit'.
+            event_type (str): The fully qualified name of the event struct, e.g. '0x1::fungible_asset::Deposit'.
+                The `store` field of a `0x1::fungible_asset::Deposit` event names the fungible store the asset was
+                deposited to, not the account that owns it. On a chain where SUPRA is held in primary fungible
+                stores (Devnet), SUPRA transfers emit `0x1::fungible_asset::Deposit` and `Withdraw` events and no
+                `0x1::coin` events.
             pagination (EventsPagination | None): Pagination options of the first request; `limit` sets the page
                 size, `start` the cursor to begin from, and `start_height` and `end_height` the block range.
                 Default to None.
