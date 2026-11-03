@@ -46,11 +46,15 @@ jobs:
 
       - name: Install dependencies
         if: env.HAS_FUNDED_KEY == 'true'
-        run: uv sync --locked
+        run: uv sync --frozen
 
       # The key is visible to this step only, not to the dependency installation above.
+      # UV_FROZEN makes `uv run` use uv.lock without resolving. The environment already
+      # matches uv.lock after the step above, so nothing is resolved or installed while
+      # the key is present.
       - name: Run the examples
         if: env.HAS_FUNDED_KEY == 'true'
         env:
           SUPRA_EXAMPLES_PRIVATE_KEY: ${{ secrets.SUPRA_EXAMPLES_PRIVATE_KEY }}
+          UV_FROZEN: "1"
         run: make examples

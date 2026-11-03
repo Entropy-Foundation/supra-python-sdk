@@ -14,9 +14,11 @@ The examples read the network and the funding account from the environment:
   without `0x`) of a funded account. When it is set, the examples fund the accounts
   they generate by transfers from this account and do not call the faucet. When it is
   not set, an example funds one generated account from the faucet and funds the other
-  accounts it generates by transfers from that account, so it calls the faucet once.
+  accounts it generates by transfers from that account. It sends one faucet request,
+  and sends it again, at most four times, while the faucet answers "TryLater".
 
-An empty variable counts as unset. The examples do not send transactions to Mainnet.
+An empty or whitespace-only variable counts as unset. The examples do not send
+transactions to Mainnet.
 """
 
 import asyncio
@@ -33,8 +35,8 @@ from supra_sdk.clients.rest.supra_client import FaucetRequestNotAcceptedError
 
 DEVNET_RPC_URL = "https://rpc-devnet.supra.com"
 
-RPC_NODE_URL = os.getenv("SUPRA_RPC_NODE_URL") or DEVNET_RPC_URL
-FAUCET_URL = os.getenv("SUPRA_FAUCET_URL") or RPC_NODE_URL
+RPC_NODE_URL = (os.getenv("SUPRA_RPC_NODE_URL") or "").strip() or DEVNET_RPC_URL
+FAUCET_URL = (os.getenv("SUPRA_FAUCET_URL") or "").strip() or RPC_NODE_URL
 
 PRIVATE_KEY_VARIABLE = "SUPRA_EXAMPLES_PRIVATE_KEY"
 
@@ -46,10 +48,18 @@ QUANTS_PER_SUPRA = 10**8
 # another amount. It pays for the gas of a few transactions at the minimum gas price.
 DEFAULT_FUNDING_QUANTS = 10 * QUANTS_PER_SUPRA
 
-# How long to retry a faucet request that the faucet does not accept ("try later"),
-# and how long to wait for the faucet's funds to show in the balance.
-FAUCET_TIMEOUT_SECONDS = 180.0
-FAUCET_RETRY_INTERVAL_SECONDS = 2.0
+# Gas units reserved for each funding transfer when checking the funding account's
+# balance. The SDK's max gas estimate is at least 1,500 units, and the node accepts a
+# transfer only if the balance covers the amount plus the max gas at the gas price.
+FUNDING_TRANSFER_GAS_UNITS = 2_000
+
+# Pauses before the second to fifth faucet request, sent while the faucet answers
+# "TryLater". After the fifth request the example gives up.
+FAUCET_RETRY_PAUSES_SECONDS = (5.0, 10.0, 20.0, 40.0)
+
+# How long to wait for the faucet's funds to show in the balance, and how often to look.
+FAUCET_BALANCE_TIMEOUT_SECONDS = 180.0
+FAUCET_BALANCE_POLL_SECONDS = 2.0
 
 PACKAGES_PATH = Path(__file__).parent / "move" / "packages.json"
 
@@ -65,20 +75,48 @@ async def fund_accounts(
     """Sends `quants` of SUPRA to each of `addresses` from the funding account.
 
     The funding account is the account of `SUPRA_EXAMPLES_PRIVATE_KEY` when it is set.
-    Otherwise it is an account generated on the first call and funded once from the
-    faucet at `SUPRA_FAUCET_URL`; later calls in the same process reuse it.
+    Otherwise it is an account generated on the first call and funded from the faucet
+    at `SUPRA_FAUCET_URL`; later calls in the same process reuse it.
+
+    Before sending, it checks that the funding account's balance covers the transfers:
+    `quants` for each address plus `FUNDING_TRANSFER_GAS_UNITS` of gas for each at the
+    node's minimum gas price.
 
     Raises:
-        RuntimeError: If the node is a Mainnet node, or the account of
-            `SUPRA_EXAMPLES_PRIVATE_KEY` holds no SUPRA.
+        RuntimeError: If the node is a Mainnet node, or the funding account's balance
+            does not cover the transfers.
 
     """
     if await supra_client.chain_id() == MAINNET_CHAIN_ID:
         raise RuntimeError("The examples do not send transactions to Mainnet")
     funder = await _funder(supra_client)
+
+    gas_unit_price = (await supra_client.estimate_gas_price())[
+        "min_configured_gas_price"
+    ]
+    needed = len(addresses) * (quants + FUNDING_TRANSFER_GAS_UNITS * gas_unit_price)
+    balance = await supra_client.account_supra_balance(funder.address())
+    if balance < needed:
+        source = f" (the account of {PRIVATE_KEY_VARIABLE})" if _private_key() else ""
+        raise RuntimeError(
+            f"The funding account {funder.address()}{source} holds "
+            f"{_supra(balance)} SUPRA; funding {len(addresses)} account(s) needs "
+            f"{_supra(needed)} SUPRA, {_supra(needed - balance)} SUPRA more"
+        )
+
     for address in addresses:
         await supra_client.transfer_supra_coin(funder, address, quants)
         print(f"Funded {address} with {quants} quants from {funder.address()}")
+
+
+def _supra(quants: int) -> str:
+    """Formats an amount of quants as SUPRA, with all eight decimals."""
+    return f"{quants // QUANTS_PER_SUPRA}.{quants % QUANTS_PER_SUPRA:08d}"
+
+
+def _private_key() -> str:
+    """The value of SUPRA_EXAMPLES_PRIVATE_KEY; empty or whitespace counts as unset."""
+    return (os.getenv(PRIVATE_KEY_VARIABLE) or "").strip()
 
 
 async def _funder(supra_client: SupraClient) -> Account:
@@ -86,13 +124,9 @@ async def _funder(supra_client: SupraClient) -> Account:
     if _funding_account is not None:
         return _funding_account
 
-    private_key = os.getenv(PRIVATE_KEY_VARIABLE) or ""
+    private_key = _private_key()
     if private_key:
-        funder = Account.load_key(private_key.strip())
-        if await supra_client.account_supra_balance(funder.address()) == 0:
-            raise RuntimeError(
-                f"The account of {PRIVATE_KEY_VARIABLE} ({funder.address()}) holds no SUPRA"
-            )
+        funder = Account.load_key(private_key)
     else:
         funder = Account.generate()
         await _fund_from_faucet(supra_client, funder.address())
@@ -106,25 +140,28 @@ async def _fund_from_faucet(supra_client: SupraClient, address: AccountAddress) 
     faucet_client = (
         supra_client if FAUCET_URL == RPC_NODE_URL else SupraClient(FAUCET_URL)
     )
-    deadline = time.monotonic() + FAUCET_TIMEOUT_SECONDS
     try:
-        while True:
+        for pause in (*FAUCET_RETRY_PAUSES_SECONDS, None):
             try:
                 await faucet_client.faucet(address)
                 break
-            except FaucetRequestNotAcceptedError:
-                if time.monotonic() > deadline:
+            # A "TryLater" answer raises FaucetRequestNotAcceptedError. SDK versions
+            # that do not handle "TryLater" raise AttributeError for it instead.
+            except (FaucetRequestNotAcceptedError, AttributeError):
+                if pause is None:
                     raise
-                await asyncio.sleep(FAUCET_RETRY_INTERVAL_SECONDS)
+                print(f"The faucet answered TryLater; requesting again in {pause:g} s")
+                await asyncio.sleep(pause)
     finally:
         if faucet_client is not supra_client:
             await faucet_client.close()
 
     # The faucet may be served by another node than `supra_client`'s.
+    deadline = time.monotonic() + FAUCET_BALANCE_TIMEOUT_SECONDS
     while await supra_client.account_supra_balance(address) == 0:
         if time.monotonic() > deadline:
             raise RuntimeError(f"{address} holds no SUPRA after the faucet request")
-        await asyncio.sleep(FAUCET_RETRY_INTERVAL_SECONDS)
+        await asyncio.sleep(FAUCET_BALANCE_POLL_SECONDS)
 
 
 @dataclass(frozen=True)

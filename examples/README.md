@@ -26,7 +26,7 @@ against another network, for example Testnet (`https://rpc-testnet.supra.com`) o
 | `SUPRA_FAUCET_URL` | Base URL of the node that serves the faucet. Default `SUPRA_RPC_NODE_URL`. |
 | `SUPRA_EXAMPLES_PRIVATE_KEY` | Ed25519 private key (32 bytes as hex, with or without `0x`) of a funded account. Optional. |
 
-An empty variable counts as unset.
+An empty or whitespace-only variable counts as unset.
 
 Every example generates fresh accounts. It funds them in one of two ways:
 
@@ -34,12 +34,20 @@ Every example generates fresh accounts. It funds them in one of two ways:
   called (except by `faucet.py`, which demonstrates the faucet). The key is never printed; the examples print the
   account's address.
 - Without it, the example funds one generated account from the faucet and that account sends SUPRA to the other
-  generated accounts. Each example makes one faucet request.
+  generated accounts. Each example makes one faucet request. The faucet can answer `TryLater` when it cannot serve
+  the request yet; the example then sends the request again after 5, 10, 20 and 40 seconds, and fails after the fifth
+  request.
+
+Before funding, an example checks that the funding account holds the SUPRA it is about to send plus 2,000 units of gas
+per transfer at the node's minimum gas price, and otherwise stops with the shortfall in SUPRA.
 
 The Devnet faucet limits the requests from one IP address, so running more than one example against Devnet needs
 `SUPRA_EXAMPLES_PRIVATE_KEY`. A localnet faucet has no such limit. Each generated account receives 10 SUPRA
 (`multisig.py`: 30 SUPRA for each account that sends transactions, 1 SUPRA for each signer); a full run of
 `make examples` takes about 315 SUPRA from the funding account, most of it left in the generated accounts.
+
+Two runs that use the same `SUPRA_EXAMPLES_PRIVATE_KEY` at the same time send transactions from the same account and
+race for its sequence numbers, so their funding transfers can fail. Run one at a time per key.
 
 Keep private keys in environment variables or an untracked file. Do not commit them.
 
@@ -61,8 +69,9 @@ SUPRA_EXAMPLES_PRIVATE_KEY=<key> uv run python -m examples.transfer_coin
 SUPRA_RPC_NODE_URL=http://localhost:27001 uv run python -m examples.transfer_coin
 ```
 
-Every example, in sequence, stopping at the first that fails. `make examples` needs `SUPRA_RPC_NODE_URL` set, so that
-the network the examples send transactions to is chosen explicitly:
+Every example, in sequence. `make examples` runs all of them even when one fails, then exits with a non-zero status
+and lists the failed examples if any failed. It needs `SUPRA_RPC_NODE_URL` set, so that the network the examples send
+transactions to is chosen explicitly:
 
 ```bash
 SUPRA_RPC_NODE_URL=https://rpc-devnet.supra.com SUPRA_EXAMPLES_PRIVATE_KEY=<key> make examples
@@ -99,7 +108,8 @@ status `Success`.
 They were compiled for the address named in the file, and `compiled_package` of `common.py` replaces that address
 with the publisher's in the bytecode before publishing. The metadata contains no address.
 
-The sources are in [`Entropy-Foundation/aptos-core`](https://github.com/Entropy-Foundation/aptos-core):
+The sources are in [`Entropy-Foundation/aptos-core`](https://github.com/Entropy-Foundation/aptos-core) at the tag
+`aptosvm-v1.16_supra-v1.8.9`, and are licensed under Apache-2.0; the compiled packages derive from them:
 
 | Package in `packages.json` | Source directory | Named address |
 |---|---|---|
@@ -108,7 +118,8 @@ The sources are in [`Entropy-Foundation/aptos-core`](https://github.com/Entropy-
 | `upgrade_and_govern_genesis` | `aptos-move/move-examples/upgrade_and_govern/genesis` | `upgrade_and_govern` |
 | `upgrade_and_govern_upgrade` | `aptos-move/move-examples/upgrade_and_govern/upgrade` | `upgrade_and_govern` |
 
-Each was compiled with the `supra` CLI of node release v11.7.2, against the Supra framework of that release, with:
+Each was compiled with the `supra` CLI of node release v11.7.2, against the framework packages
+(`aptos-move/framework/*`) of the same tag, with:
 
 ```bash
 supra move tool compile --save-metadata --package-dir <source directory> \
