@@ -32,6 +32,29 @@ requires_node = unittest.skipUnless(
 )
 
 
+SUPRA_COIN_STORE = "0x1::coin::CoinStore<0x1::supra_coin::SupraCoin>"
+FA_DEPOSIT_EVENT = "0x1::fungible_asset::Deposit"
+COIN_DEPOSIT_EVENT = "0x1::coin::DepositEvent"
+
+
+async def has_supra_coin_store(
+    supra_client: SupraClient, address: AccountAddress
+) -> bool:
+    """Whether the account holds SUPRA in a `CoinStore`.
+
+    Nodes whose genesis predates the fungible-asset migration keep SUPRA in a
+    `CoinStore<SupraCoin>`; newer ones keep it in a primary fungible store, so the
+    resource is absent.
+    """
+    try:
+        await supra_client.account_resource(address, SUPRA_COIN_STORE)
+    except ApiError as error:
+        if error.status_code == 404:
+            return False
+        raise
+    return True
+
+
 @requires_node
 class TestSupraClientEndpointsIntegration(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -192,6 +215,11 @@ class TestSupraClientEndpointsIntegration(unittest.IsolatedAsyncioTestCase):
             0,
         )
         await self.supra_client.faucet(self.test_account.address())
+        # Without a SUPRA `CoinStore`, SUPRA moves between primary fungible stores and
+        # `account_coin_transactions` lists none of it.
+        uses_coin_store = await has_supra_coin_store(
+            self.supra_client, self.test_account.address()
+        )
         self.assertEqual(
             len(
                 (
@@ -200,9 +228,9 @@ class TestSupraClientEndpointsIntegration(unittest.IsolatedAsyncioTestCase):
                     )
                 )[0]
             ),
-            1,
+            1 if uses_coin_store else 0,
         )
-        await self.supra_client.transfer_supra_coin(
+        tx_hash = await self.supra_client.transfer_supra_coin(
             self.test_account, AccountAddress.from_str("0x1"), 100
         )
         self.assertEqual(
@@ -213,7 +241,7 @@ class TestSupraClientEndpointsIntegration(unittest.IsolatedAsyncioTestCase):
                     )
                 )[0]
             ),
-            2,
+            2 if uses_coin_store else 0,
         )
         self.assertEqual(
             len(
@@ -223,8 +251,15 @@ class TestSupraClientEndpointsIntegration(unittest.IsolatedAsyncioTestCase):
                     )
                 )[0]
             ),
-            1,
+            1 if uses_coin_store else 0,
         )
+        if not uses_coin_store:
+            # The deposit event names the receiving store, not the account.
+            deposits = await self._events_of_type(tx_hash, FA_DEPOSIT_EVENT)
+            self.assertEqual(
+                [event["data"]["amount"] for event in deposits],
+                ["100"],
+            )
 
     async def test_transaction_by_hash(self):
         await self.supra_client.faucet(self.test_account.address())
@@ -295,11 +330,15 @@ class TestSupraClientEndpointsIntegration(unittest.IsolatedAsyncioTestCase):
         tx_hash = await self.supra_client.transfer_supra_coin(
             self.test_account, AccountAddress.from_str("0x1"), 1
         )
-        # # Due to bug in rpc, this case will fail
-        # self.assertGreater(
-        #     len((await self.supra_client.events_by_type("0x1::coin::DepositEvent"))[0]),
-        #     1,
-        # )
+        # With a SUPRA `CoinStore` the transfer emits `0x1::coin::DepositEvent`;
+        # without one it emits `0x1::fungible_asset::Deposit`.
+        deposit_event_type = (
+            COIN_DEPOSIT_EVENT
+            if await has_supra_coin_store(
+                self.supra_client, self.test_account.address()
+            )
+            else FA_DEPOSIT_EVENT
+        )
         block_height = (await self.supra_client.transaction_by_hash(tx_hash))[
             "block_header"
         ]["height"]
@@ -307,7 +346,7 @@ class TestSupraClientEndpointsIntegration(unittest.IsolatedAsyncioTestCase):
             len(
                 (
                     await self.supra_client.events_by_type(
-                        "0x1::coin::DepositEvent",
+                        deposit_event_type,
                         EventsPagination(
                             start_height=block_height,
                             end_height=block_height + 1,
@@ -351,6 +390,16 @@ class TestSupraClientEndpointsIntegration(unittest.IsolatedAsyncioTestCase):
             "block_header"
         ]["hash"]
         self.assertTrue(tx_hash in (await self.supra_client.txs_by_block(block_hash)))
+
+    async def _events_of_type(
+        self, tx_hash: str, event_type: str
+    ) -> list[dict[str, Any]]:
+        tx_data = await self.supra_client.transaction_by_hash(tx_hash)
+        return [
+            event
+            for event in tx_data["output"]["Move"]["events"]
+            if event["type"] == event_type
+        ]
 
     async def create_test_signed_transaction_payload(self) -> SignedTransaction:
         transaction_arguments = [
@@ -408,7 +457,7 @@ class TestSupraAutomationTransactions(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNotNone(
             await self._get_event_data_from_tx(
-                task_cancel_tx_hash, "0x1::automation_registry::TaskCancelled"
+                task_cancel_tx_hash, "0x1::automation_registry::TaskCancelledV2"
             )
         )
 
@@ -427,7 +476,7 @@ class TestSupraAutomationTransactions(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNotNone(
             await self._get_event_data_from_tx(
-                task_stop_tx_hash, "0x1::automation_registry::TasksStopped"
+                task_stop_tx_hash, "0x1::automation_registry::TasksStoppedV2"
             )
         )
 
@@ -445,7 +494,7 @@ class TestSupraAutomationTransactions(unittest.IsolatedAsyncioTestCase):
             self.sender,
             automated_function,
             9,
-            100,
+            (await self.supra_client.estimate_gas_price())["min_configured_gas_price"],
             1 * (10**8),
             int(time.time()) + 7200,
             [],

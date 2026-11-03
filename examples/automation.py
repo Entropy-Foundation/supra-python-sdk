@@ -40,17 +40,17 @@ async def main():
     # registration parameters. To use version 2, pass `automation_task_type` (USER or
     # SYSTEM; SYSTEM needs an account the registry has authorised for system tasks)
     # and/or `automation_priority`. Without a priority, the registry uses the task's
-    # index as its priority:
+    # index as its priority.
     #
-    #     from supra_sdk.transactions import AutomationTaskType
-    #
-    #     automation_task_type=AutomationTaskType.USER,
-    #     automation_priority=10,
+    # The gas price cap must be at least the node's minimum gas price.
+    gas_price_cap = (await supra_client.estimate_gas_price())[
+        "min_configured_gas_price"
+    ]
     task_registration_tx_hash = await supra_client.register_automation_task(
         sender,
         automated_function,
         9,
-        100,
+        gas_price_cap,
         1 * (10**8),
         int(time.time()) + 7200,
         [],
@@ -66,7 +66,7 @@ async def main():
         if event["type"] == "0x1::automation_registry::AutomationTaskMetaData":
             task_index = event["data"]["task_index"]
 
-    if not task_index:
+    if task_index is None:
         raise Exception("`task_index` not found in automation registration transaction")
     print(f"Task registered successfully, task_id: {task_index}")
 
