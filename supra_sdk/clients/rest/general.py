@@ -117,9 +117,9 @@ class GeneralRestClient(RestClient):
                 - version (str): Version of the node's Rust packages, e.g. '0.5.0'. It is the same for every
                   release; use `release` to identify the release.
                 - release (str): Release tag the node binary was built from, e.g. 'supra_node_v12.0.0', or
-                  'supra_node_v12.0.0.rc6' for a release candidate. 'unreleased' for a binary built from a commit
+                  'supra_node_v12.0.0.rc7' for a release candidate. 'unreleased' for a binary built from a commit
                   that is not a release. The key is absent from the response of a node before
-                  `supra_node_v12.0.0`.
+                  `supra_node_v12.0.0.rc7`: every v11 release and `supra_node_v12.0.0.rc1` to `rc6`.
                 - branch (str): Git branch used for the build. Empty when the build was made from a tag or the
                   branch was not recorded.
                 - commit_hash (str): Full git commit hash the binary was built from. Empty when the build did not
