@@ -521,6 +521,12 @@ class AutomationTaskType(enum.Enum):
     SYSTEM = 1
 
 
+_USER_TASK_PRIORITY_MESSAGE = (
+    "a priority applies to system tasks only; pass task_type=AutomationTaskType.SYSTEM "
+    "or omit the priority"
+)
+
+
 class AutomationRegistrationParams:
     V1: int = 0
     V2: int = 1
@@ -550,13 +556,22 @@ class AutomationRegistrationParams:
     ) -> AutomationRegistrationParams:
         """Builds registration parameters, choosing the version from the arguments.
 
-        With neither ``task_type`` nor ``priority`` the result is version 1. With
-        either, it is version 2; a missing ``task_type`` is then
-        ``AutomationTaskType.USER``.
+        With neither ``task_type`` nor ``priority`` the result is version 1. With a
+        ``task_type`` it is version 2.
 
-        Without a priority, the registry uses the task's index as its priority.
+        A priority applies to system tasks only; the registry refuses a user task that
+        carries one. A user task has no priority: the registry uses the task's index
+        as its priority. A system task can only be registered by an account the
+        registry has authorised.
+
+        Raises:
+            ValueError: If ``priority`` is given and ``task_type`` is not
+                ``AutomationTaskType.SYSTEM`` (including when it is ``None``), or if
+                ``priority`` is outside the range of a ``u64``.
         """
-        if task_type is None and priority is None:
+        if priority is not None and task_type is not AutomationTaskType.SYSTEM:
+            raise ValueError(_USER_TASK_PRIORITY_MESSAGE)
+        if task_type is None:
             return AutomationRegistrationParams(
                 AutomationRegistrationParamsV1(
                     automated_function,
@@ -575,7 +590,7 @@ class AutomationRegistrationParams:
                 automation_fee_cap_for_epoch,
                 expiration_timestamp_secs,
                 aux_data,
-                AutomationTaskType.USER if task_type is None else task_type,
+                task_type,
                 priority,
             )
         )
@@ -646,8 +661,14 @@ class AutomationRegistrationParamsV2:
     """Version 2 of the automation registration parameters.
 
     The version 1 fields, followed by the task type and an optional priority.
-    Without a priority (``None``), the registry uses the task's index as its
-    priority.
+    A priority applies to system tasks only; a user task has none, and the
+    registry uses the task's index as its priority. A system task without a
+    priority is treated the same way. A system task can only be registered by an
+    account the registry has authorised.
+
+    Raises:
+        ValueError: If ``priority`` is given with ``AutomationTaskType.USER``, or
+            is outside the range of a ``u64``.
     """
 
     def __init__(
@@ -665,6 +686,8 @@ class AutomationRegistrationParamsV2:
             raise TypeError("task_type must be an AutomationTaskType")
         if priority is not None and not 0 <= priority <= MAX_U64:
             raise ValueError("priority must be from 0 to 2^64 - 1")
+        if priority is not None and task_type is AutomationTaskType.USER:
+            raise ValueError(_USER_TASK_PRIORITY_MESSAGE)
         self.automated_function = automated_function
         self.max_gas_amount = max_gas_amount
         self.gas_price_cap = gas_price_cap

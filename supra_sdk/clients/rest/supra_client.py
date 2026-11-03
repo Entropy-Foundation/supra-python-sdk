@@ -807,8 +807,9 @@ class SupraClient(
         """Registers Supra automation task.
 
         With neither ``automation_task_type`` nor ``automation_priority`` the task is
-        registered with version 1 of the registration parameters. With either, version 2
-        is used, and a missing task type is ``AutomationTaskType.USER``.
+        registered with version 1 of the registration parameters. With a task type,
+        version 2 is used. A priority applies to system tasks only: a priority without
+        ``AutomationTaskType.SYSTEM`` raises ``ValueError`` before anything is signed.
 
         Args:
             owner_account (Account): Account registering an automation task.
@@ -823,13 +824,16 @@ class SupraClient(
                 A ``SYSTEM`` task can only be registered by an account the registry has
                 authorised for system tasks; other accounts' registrations abort.
                 Defaults to version 1 parameters (a user task).
-            automation_priority (int | None): Priority of the task. Without a priority,
-                the registry uses the task's index as its priority.
+            automation_priority (int | None): Priority of a system task; allowed only
+                with ``automation_task_type=AutomationTaskType.SYSTEM``. A user task has
+                no priority: the registry uses the task's index as its priority.
 
         Returns:
             str: Transaction hash.
 
         Raises:
+            ValueError: If ``automation_priority`` is given without
+                ``AutomationTaskType.SYSTEM``.
             TransactionFailedError: If waiting is enabled and the final status is not `Success`.
             TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
 

@@ -100,10 +100,26 @@ class TestAutomationRegistrationParamsBcs(unittest.TestCase):
     def test_v2_user_without_priority(self):
         self.assertEqual(encode(build(task_type=AutomationTaskType.USER)), V2_USER_NONE)
 
-    def test_v2_user_with_priority(self):
-        params = build(task_type=AutomationTaskType.USER, priority=10)
-        self.assertEqual(params.variant, AutomationRegistrationParams.V2)
-        self.assertEqual(encode(params), V2_USER_10)
+    def test_v2_user_with_priority_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "system tasks only"):
+            build(task_type=AutomationTaskType.USER, priority=10)
+        with self.assertRaisesRegex(ValueError, "system tasks only"):
+            AutomationRegistrationParamsV2(
+                entry_function(),
+                500,
+                200_000,
+                1_000_000_000,
+                1_800_000_000,
+                [],
+                AutomationTaskType.USER,
+                10,
+            )
+
+    def test_v2_user_with_priority_does_not_deserialize(self):
+        with self.assertRaisesRegex(ValueError, "system tasks only"):
+            AutomationRegistrationParams.deserialize(
+                Deserializer(bytes.fromhex(V2_USER_10))
+            )
 
     def test_v2_system_with_largest_priority(self):
         params = build(task_type=AutomationTaskType.SYSTEM, priority=MAX_U64)
@@ -113,7 +129,6 @@ class TestAutomationRegistrationParamsBcs(unittest.TestCase):
         for hex_bytes, task_type, priority in [
             (V1, None, None),
             (V2_USER_NONE, AutomationTaskType.USER, None),
-            (V2_USER_10, AutomationTaskType.USER, 10),
             (V2_SYSTEM_MAX, AutomationTaskType.SYSTEM, MAX_U64),
         ]:
             with self.subTest(hex_bytes=hex_bytes):
@@ -145,9 +160,9 @@ class TestAutomationRegistrationParamsBcs(unittest.TestCase):
 
     def test_priority_out_of_range_is_rejected(self):
         with self.assertRaises(ValueError):
-            build(priority=MAX_U64 + 1)
+            build(task_type=AutomationTaskType.SYSTEM, priority=MAX_U64 + 1)
         with self.assertRaises(ValueError):
-            build(priority=-1)
+            build(task_type=AutomationTaskType.SYSTEM, priority=-1)
 
 
 class TestAutomationRegistrationParamsBuilder(unittest.TestCase):
@@ -162,11 +177,13 @@ class TestAutomationRegistrationParamsBuilder(unittest.TestCase):
         )
         self.assertIsNone(params.registration_params.priority)
 
-    def test_priority_alone_is_a_user_task(self):
-        params = build(priority=0)
-        self.assertEqual(params.variant, AutomationRegistrationParams.V2)
-        self.assertEqual(params.registration_params.task_type, AutomationTaskType.USER)
-        self.assertEqual(params.registration_params.priority, 0)
+    def test_priority_without_a_task_type_is_rejected(self):
+        for priority in (0, 10):
+            with (
+                self.subTest(priority=priority),
+                self.assertRaisesRegex(ValueError, "system tasks only"),
+            ):
+                build(priority=priority)
 
 
 class TestRegisterAutomationTask(unittest.IsolatedAsyncioTestCase):
@@ -205,9 +222,20 @@ class TestRegisterAutomationTask(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(encode(params), V2_SYSTEM_MAX)
 
-    async def test_priority_alone_is_a_user_task(self):
-        params = await self.register(automation_priority=10)
-        self.assertEqual(encode(params), V2_USER_10)
+    async def test_priority_without_a_task_type_is_rejected_before_signing(self):
+        with self.assertRaisesRegex(ValueError, "system tasks only"):
+            await self.register(automation_priority=10)
+        self.client.create_signed_transaction.assert_not_called()
+        self.client.submit_transaction.assert_not_called()
+
+    async def test_user_task_with_priority_is_rejected_before_signing(self):
+        with self.assertRaisesRegex(ValueError, "system tasks only"):
+            await self.register(
+                automation_task_type=AutomationTaskType.USER,
+                automation_priority=10,
+            )
+        self.client.create_signed_transaction.assert_not_called()
+        self.client.submit_transaction.assert_not_called()
 
 
 if __name__ == "__main__":
