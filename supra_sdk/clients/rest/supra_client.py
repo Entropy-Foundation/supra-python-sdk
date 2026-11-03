@@ -806,9 +806,8 @@ class SupraClient(
     ) -> str:
         """Registers Supra automation task.
 
-        With neither ``automation_task_type`` nor ``automation_priority`` the task is
-        registered with version 1 of the registration parameters. With a task type,
-        version 2 is used. A priority applies to system tasks only: a priority without
+        Without ``automation_task_type`` the task is registered with version 1 of the
+        registration parameters; with one, version 2 is used. A priority applies to system tasks only: a priority without
         ``AutomationTaskType.SYSTEM`` raises ``ValueError`` before anything is signed.
 
         Args:
@@ -833,7 +832,7 @@ class SupraClient(
 
         Raises:
             ValueError: If ``automation_priority`` is given without
-                ``AutomationTaskType.SYSTEM``.
+                ``AutomationTaskType.SYSTEM``, or is outside the range of a ``u64``.
             TransactionFailedError: If waiting is enabled and the final status is not `Success`.
             TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
 

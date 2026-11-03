@@ -101,9 +101,9 @@ class TestAutomationRegistrationParamsBcs(unittest.TestCase):
         self.assertEqual(encode(build(task_type=AutomationTaskType.USER)), V2_USER_NONE)
 
     def test_v2_user_with_priority_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, "system tasks only"):
+        with self.assertRaisesRegex(ValueError, "cannot carry a priority"):
             build(task_type=AutomationTaskType.USER, priority=10)
-        with self.assertRaisesRegex(ValueError, "system tasks only"):
+        with self.assertRaisesRegex(ValueError, "cannot carry a priority"):
             AutomationRegistrationParamsV2(
                 entry_function(),
                 500,
@@ -184,7 +184,7 @@ class TestAutomationRegistrationParamsBuilder(unittest.TestCase):
         for priority in (0, 10):
             with (
                 self.subTest(priority=priority),
-                self.assertRaisesRegex(ValueError, "system tasks only"),
+                self.assertRaisesRegex(ValueError, "cannot carry a priority"),
             ):
                 build(priority=priority)
 
@@ -226,13 +226,13 @@ class TestRegisterAutomationTask(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(encode(params), V2_SYSTEM_MAX)
 
     async def test_priority_without_a_task_type_is_rejected_before_signing(self):
-        with self.assertRaisesRegex(ValueError, "system tasks only"):
+        with self.assertRaisesRegex(ValueError, "cannot carry a priority"):
             await self.register(automation_priority=10)
         self.client.create_signed_transaction.assert_not_called()
         self.client.submit_transaction.assert_not_called()
 
     async def test_user_task_with_priority_is_rejected_before_signing(self):
-        with self.assertRaisesRegex(ValueError, "system tasks only"):
+        with self.assertRaisesRegex(ValueError, "cannot carry a priority"):
             await self.register(
                 automation_task_type=AutomationTaskType.USER,
                 automation_priority=10,
