@@ -146,6 +146,55 @@ class TestSequenceNumber(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(raw.sequence_number, 7)
         await client.close()
 
+    async def test_fee_payer_transaction_with_zero_reads_no_account(self):
+        node = FakeNode()
+        client = make_client(node)
+        self.addAsyncCleanup(client.close)
+        signed = await client.create_fee_payer_transaction(
+            Account.generate(),
+            Account.generate(),
+            [],
+            transfer_payload(),
+            sequence_number=0,
+        )
+        self.assertEqual(signed.transaction.sequence_number, 0)
+        self.assertEqual([r for r in node.requests if "/accounts/" in r[1]], [])
+        simulated = decode_simulated(node.simulated[0])
+        self.assertEqual(simulated.transaction.sequence_number, 0)
+
+    async def test_fee_payer_transaction_without_it_asks_the_node(self):
+        node = FakeNode()
+        client = make_client(node)
+        self.addAsyncCleanup(client.close)
+        signed = await client.create_fee_payer_transaction(
+            Account.generate(), Account.generate(), [], transfer_payload()
+        )
+        self.assertEqual(signed.transaction.sequence_number, 7)
+        self.assertEqual(len([r for r in node.requests if "/accounts/" in r[1]]), 1)
+
+    async def test_multi_agent_transaction_with_zero_reads_no_account(self):
+        node = FakeNode()
+        client = make_client(node)
+        self.addAsyncCleanup(client.close)
+        signed = await client.create_multi_agent_transaction(
+            Account.generate(),
+            [Account.generate()],
+            transfer_payload(),
+            sequence_number=0,
+        )
+        self.assertEqual(signed.transaction.sequence_number, 0)
+        self.assertEqual([r for r in node.requests if "/accounts/" in r[1]], [])
+
+    async def test_multi_agent_transaction_without_it_asks_the_node(self):
+        node = FakeNode()
+        client = make_client(node)
+        self.addAsyncCleanup(client.close)
+        signed = await client.create_multi_agent_transaction(
+            Account.generate(), [Account.generate()], transfer_payload()
+        )
+        self.assertEqual(signed.transaction.sequence_number, 7)
+        self.assertEqual(len([r for r in node.requests if "/accounts/" in r[1]]), 1)
+
 
 NOW = 1_700_000_000
 PARAMETERS = ("GET", f"{PREFIX}/transactions/parameters")

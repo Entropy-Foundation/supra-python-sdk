@@ -720,6 +720,7 @@ class SupraClient(
         secondary_accounts: list[Account],
         transaction_payload: TransactionPayload,
         max_gas_amount: int | None = None,
+        sequence_number: int | None = None,
     ) -> SignedTransaction:
         """Creates a fee-payer authenticator type signed transaction.
 
@@ -737,6 +738,10 @@ class SupraClient(
             transaction_payload (TransactionPayload): The transaction payload.
             max_gas_amount (int | None): Max gas units for this transaction. `None` uses the config value or the
                 estimate. Default to None.
+            sequence_number (int | None): The sender's sequence number. `None` reads it from the node, which fails for
+                a sender that has no account. Pass 0 for such a sender: a v12 node accepts a fee-payer transaction
+                with sequence number 0 from a sender with no account, a v11.7.x node refuses it. Any integer,
+                including 0, is used as given without a request. Default to None.
 
         Returns:
             SignedTransaction: The constructed multi-agent authenticator type signed transaction.
@@ -749,7 +754,7 @@ class SupraClient(
         raw_transaction = await self._build_raw_transaction(
             sender,
             transaction_payload,
-            None,
+            sequence_number,
             max_gas_amount,
             to_signed,
             fee_payer.address(),
@@ -762,6 +767,7 @@ class SupraClient(
         secondary_accounts: list[Account],
         transaction_payload: TransactionPayload,
         max_gas_amount: int | None = None,
+        sequence_number: int | None = None,
     ) -> SignedTransaction:
         """Creates a multi-agent authenticator type signed transaction.
 
@@ -778,6 +784,9 @@ class SupraClient(
             transaction_payload (TransactionPayload): The transaction payload.
             max_gas_amount (int | None): Max gas units for this transaction. `None` uses the config value or the
                 estimate. Default to None.
+            sequence_number (int | None): The sender's sequence number. `None` reads it from the node, which fails for
+                a sender that has no account; any integer, including 0, is used as given without a request. Default
+                to None.
 
         Returns:
             SignedTransaction: The constructed multi-agent authenticator type signed transaction.
@@ -788,7 +797,7 @@ class SupraClient(
         """
         to_signed = _multi_agent_signer(sender, secondary_accounts)
         raw_transaction = await self._build_raw_transaction(
-            sender, transaction_payload, None, max_gas_amount, to_signed
+            sender, transaction_payload, sequence_number, max_gas_amount, to_signed
         )
         return to_signed(raw_transaction)
 
