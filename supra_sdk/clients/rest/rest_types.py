@@ -173,6 +173,9 @@ TRANSACTION_SIMULATE_TRANSACTION_ENDPOINT = f"{RPC_API_PREFIX}/transactions/simu
 # View function endpoint
 VIEW_FUNCTION_ENDPOINT = f"{RPC_API_PREFIX}/view"
 
+# Node version endpoint
+VERSION_ENDPOINT = f"{RPC_API_PREFIX}/version"
+
 # Table item endpoint
 TABLE_ITEMS_ENDPOINT = f"{RPC_API_PREFIX}/tables/{{table_handle}}/item"
 

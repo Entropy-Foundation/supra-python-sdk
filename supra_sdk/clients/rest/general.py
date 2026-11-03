@@ -9,6 +9,7 @@ from supra_sdk.clients.rest.rest_types import (
     CHAIN_ID_ENDPOINT,
     EVENTS_BY_TYPE_ENDPOINT,
     TABLE_ITEMS_ENDPOINT,
+    VERSION_ENDPOINT,
     VIEW_FUNCTION_ENDPOINT,
     EventsPagination,
     format_endpoint,
@@ -107,3 +108,19 @@ class GeneralRestClient(RestClient):
         params = pagination.to_params() if pagination else {}
         response = await self.api_client.get(endpoint=endpoint, params=params)
         return response.json()["data"], response.headers.get("x-supra-cursor", "")
+
+    async def version(self) -> dict[str, Any]:
+        """Reads the node's version information from `GET /rpc/v3/version`.
+
+        Returns:
+            dict[str, Any]: The node's response, with these fields:
+                - version (str): Version of the node's RPC API crate, e.g. '0.5.0'.
+                - release (str): Release tag of the node, e.g. 'supra_node_v12.0.0'. Sent by nodes from
+                  `supra_node_v12.0.0`; the key is absent from the response of an earlier node.
+                - branch (str): Git branch the node was built from. May be an empty string.
+                - commit_hash (str): Git commit the node was built from.
+                - build_time (str): Time of the build.
+                - build_env (str): Rust toolchain that built the node.
+
+        """
+        return (await self.api_client.get(endpoint=VERSION_ENDPOINT)).json()
