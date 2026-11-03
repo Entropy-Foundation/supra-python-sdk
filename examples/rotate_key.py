@@ -7,7 +7,7 @@ from typing import cast
 
 import supra_sdk.asymmetric_crypto as asymmetric_crypto
 import supra_sdk.ed25519 as ed25519
-from examples.common import RPC_NODE_URL
+from examples.common import RPC_NODE_URL, fund_accounts
 from supra_sdk.account import Account, RotationProofChallenge
 from supra_sdk.account_address import AccountAddress
 from supra_sdk.authenticator import Authenticator
@@ -30,14 +30,15 @@ def format_account_info(account: Account) -> str:
     vals = [
         str(account.address()),
         account.auth_key(),
-        account.private_key.hex(),
         str(account.public_key()),
     ]
     return "".join([truncate(v).ljust(WIDTH, " ") for v in vals])
 
 
 async def rotate_auth_key_ed25519_payload(
-    supra_client: SupraClient, from_account: Account, to_private_key: ed25519.PrivateKey
+    supra_client: SupraClient,
+    from_account: Account,
+    to_private_key: asymmetric_crypto.PrivateKey,
 ) -> TransactionPayload:
     to_account = Account.load_key(to_private_key.hex())
     rotation_proof_challenge = RotationProofChallenge(
@@ -64,7 +65,7 @@ async def rotate_auth_key_ed25519_payload(
 async def rotate_auth_key_multi_ed25519_payload(
     supra_client: SupraClient,
     from_account: Account,
-    private_keys: list[ed25519.PrivateKey],
+    private_keys: list[asymmetric_crypto.PrivateKey],
 ) -> TransactionPayload:
     to_accounts = list(
         map(lambda private_key: Account.load_key(private_key.hex()), private_keys)
@@ -125,7 +126,7 @@ def rotation_payload(
     return TransactionPayload(entry_function)
 
 
-async def main():
+async def main() -> None:
     # Initialize the clients used to interact with the blockchain
     supra_client = SupraClient(RPC_NODE_URL)
 
@@ -134,7 +135,7 @@ async def main():
     bob = Account.generate()
 
     # Fund Alice's account, since we don't use Bob's
-    await supra_client.faucet(alice.address())
+    await fund_accounts(supra_client, [alice.address()])
 
     # Display formatted account info
     print(
@@ -142,12 +143,9 @@ async def main():
         + "Account".ljust(WIDTH, " ")
         + "Address".ljust(WIDTH, " ")
         + "Auth Key".ljust(WIDTH, " ")
-        + "Private Key".ljust(WIDTH, " ")
         + "Public Key".ljust(WIDTH, " ")
     )
-    print(
-        "-------------------------------------------------------------------------------------------"
-    )
+    print("-" * (4 * WIDTH))
     print("Alice".ljust(WIDTH, " ") + format_account_info(alice))
     print("Bob".ljust(WIDTH, " ") + format_account_info(bob))
 

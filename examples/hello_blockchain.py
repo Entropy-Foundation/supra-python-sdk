@@ -2,19 +2,21 @@
 # Parts of the project are originally copyright © Aptos Foundation
 # SPDX-License-Identifier: Apache-2.0
 
-"""This example depends on the hello_blockchain.move module having already been published to the destination blockchain.
+"""Sets and reads a message with the `message` module of the `hello_blockchain` package.
 
-Steps:
-    * `cd ~/aptos-core/aptos-move/move-examples/hello_blockchain`
-    * `supra move tool publish --named-addresses hello_blockchain=${your_address_from_supra_init}`
-    * `python3 -m examples.hello_blockchain ${your_address_from_supra_init}`
+`python -m examples.hello_blockchain` publishes the compiled package of
+`examples/move/packages.json` under Alice's address and uses it.
+`python -m examples.hello_blockchain <address>` uses the package already published at
+`<address>` instead, for example one published with:
+
+    supra move tool publish --named-addresses hello_blockchain=<address>
 """
 
 import asyncio
 import sys
 from typing import Any
 
-from examples.common import RPC_NODE_URL
+from examples.common import RPC_NODE_URL, compiled_package, fund_accounts
 from supra_sdk.account import Account
 from supra_sdk.account_address import AccountAddress
 from supra_sdk.bcs import Serializer
@@ -58,7 +60,7 @@ class HelloBlockchainClient(SupraClient):
         return await self.submit_transaction(signed_transaction)
 
 
-async def main(contract_address: AccountAddress):
+async def main(contract_address: AccountAddress | None) -> None:
     alice = Account.generate()
     bob = Account.generate()
 
@@ -66,8 +68,14 @@ async def main(contract_address: AccountAddress):
     print(f"Bob account address: {bob.address()}")
 
     supra_client = HelloBlockchainClient(RPC_NODE_URL)
-    await supra_client.faucet(alice.address())
-    await supra_client.faucet(bob.address())
+    await fund_accounts(supra_client, [alice.address(), bob.address()])
+
+    if contract_address is None:
+        print("\n=== Publishing the hello_blockchain package ===")
+        package = compiled_package("hello_blockchain", alice.address())
+        await supra_client.publish_package(alice, package.metadata, package.modules)
+        contract_address = alice.address()
+        print(f"Published under {contract_address}")
 
     print("\n=== Testing Alice ===")
     message = await supra_client.get_message(contract_address, alice.address())
@@ -89,7 +97,7 @@ async def main(contract_address: AccountAddress):
 
 
 if __name__ == "__main__":
-    assert len(sys.argv) == 2, "Expecting the contract address"
-    contract_address_str = sys.argv[1]
-
-    asyncio.run(main(AccountAddress.from_str(contract_address_str)))
+    assert len(sys.argv) <= 2, "Expecting at most the contract address"
+    asyncio.run(
+        main(AccountAddress.from_str(sys.argv[1]) if len(sys.argv) == 2 else None)
+    )

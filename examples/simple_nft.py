@@ -5,13 +5,13 @@
 import asyncio
 import json
 
-from examples.common import RPC_NODE_URL
+from examples.common import RPC_NODE_URL, fund_accounts
 from supra_sdk.account import Account
 from supra_sdk.clients import SupraTokenClient
 from supra_sdk.clients.rest import SupraClient
 
 
-async def main():
+async def main() -> None:
     supra_client = SupraClient(RPC_NODE_URL)
     token_client = SupraTokenClient(supra_client)
 
@@ -25,8 +25,7 @@ async def main():
     print(f"Alice account address: {alice.address()}")
     print(f"Bob account address: {bob.address()}")
 
-    await supra_client.faucet(alice.address())
-    await supra_client.faucet(bob.address())
+    await fund_accounts(supra_client, [alice.address(), bob.address()])
 
     print("\n=== Creating Collection and Token ===")
     await token_client.create_collection(
@@ -77,13 +76,22 @@ async def main():
         property_version,
     )
 
-    alice_balance = token_client.get_token_balance(
-        alice.address(), alice.address(), collection_name, token_name, property_version
+    alice_balance, bob_balance = await asyncio.gather(
+        token_client.get_token_balance(
+            alice.address(),
+            alice.address(),
+            collection_name,
+            token_name,
+            property_version,
+        ),
+        token_client.get_token_balance(
+            bob.address(),
+            alice.address(),
+            collection_name,
+            token_name,
+            property_version,
+        ),
     )
-    bob_balance = token_client.get_token_balance(
-        bob.address(), alice.address(), collection_name, token_name, property_version
-    )
-    [alice_balance, bob_balance] = await asyncio.gather(*[alice_balance, bob_balance])
     print(f"Alice's token balance: {alice_balance}")
     print(f"Bob's token balance: {bob_balance}")
 
@@ -91,13 +99,22 @@ async def main():
     await token_client.direct_transfer_token(
         bob, alice, alice.address(), collection_name, token_name, 0, 1
     )
-    alice_balance = token_client.get_token_balance(
-        alice.address(), alice.address(), collection_name, token_name, property_version
+    alice_balance, bob_balance = await asyncio.gather(
+        token_client.get_token_balance(
+            alice.address(),
+            alice.address(),
+            collection_name,
+            token_name,
+            property_version,
+        ),
+        token_client.get_token_balance(
+            bob.address(),
+            alice.address(),
+            collection_name,
+            token_name,
+            property_version,
+        ),
     )
-    bob_balance = token_client.get_token_balance(
-        bob.address(), alice.address(), collection_name, token_name, property_version
-    )
-    [alice_balance, bob_balance] = await asyncio.gather(*[alice_balance, bob_balance])
     print(f"Alice's token balance: {alice_balance}")
     print(f"Bob's token balance: {bob_balance}")
 

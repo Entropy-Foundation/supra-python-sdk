@@ -4,7 +4,7 @@
 
 import asyncio
 
-from examples.common import RPC_NODE_URL
+from examples.common import RPC_NODE_URL, fund_accounts
 from supra_sdk.account import Account
 from supra_sdk.bcs import Serializer
 from supra_sdk.clients.rest import SupraClient
@@ -16,7 +16,7 @@ from supra_sdk.transactions import (
 from supra_sdk.type_tag import StructTag, TypeTag
 
 
-async def main():
+async def main() -> None:
     supra_client = SupraClient(RPC_NODE_URL)
     alice = Account.generate()
     bob = Account.generate()
@@ -26,9 +26,9 @@ async def main():
     print(f"Bob account address: {bob.address()}")
     print(f"Sponsor account address: {sponsor.address()}")
 
-    await supra_client.faucet(sponsor.address())
-    await supra_client.faucet(alice.address())
-    await supra_client.faucet(bob.address())
+    await fund_accounts(
+        supra_client, [sponsor.address(), alice.address(), bob.address()]
+    )
 
     print("Accounts data before fee payer based transfer transaction")
     print(
@@ -65,7 +65,7 @@ async def main():
 
     tx_hash = await supra_client.submit_transaction(signed_transaction)
     print(f"Transaction successfully executed, tx_hash: {tx_hash}")
-    print("Accounts data before fee payer based transfer transaction")
+    print("Accounts data after fee payer based transfer transaction")
     print(
         f"Alice sequence number: {await supra_client.account_sequence_number(alice.address())}"
     )

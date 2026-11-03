@@ -4,29 +4,47 @@
 import asyncio
 import json
 import time
+from collections.abc import Awaitable, Callable
 
-from examples.common import RPC_NODE_URL
+from examples.common import RPC_NODE_URL, fund_accounts
 from supra_sdk.account import Account
 from supra_sdk.account_address import AccountAddress
 from supra_sdk.bcs import Serializer
-from supra_sdk.clients.rest import SupraClient, SupraClientConfig
+from supra_sdk.clients.rest import SupraClient
+from supra_sdk.clients.rest.supra_client import TransactionFailedError
+from supra_sdk.clients.rest.transaction_defaults import MaxGasEstimationError
 from supra_sdk.transactions import EntryFunction, TransactionArgument
 
+TASK_DURATION_SECONDS = 3600
 
-async def main():
-    supra_client_config = SupraClientConfig(
-        expiration_ttl=300,
-        gas_unit_price=100_000,
-        max_gas_amount=100_000,
-    )
-    supra_client = SupraClient(RPC_NODE_URL, supra_client_config)
+# The registry refuses registrations and stops while it moves from one automation cycle
+# to the next. The example sends the transaction again after a pause, this many times.
+CYCLE_TRANSITION_ATTEMPTS = 10
+CYCLE_TRANSITION_PAUSE_SECONDS = 3.0
+
+
+async def outside_cycle_transition(action: Callable[[], Awaitable[str]]) -> str:
+    """Runs `action` again while the registry reports a cycle transition in progress."""
+    for attempt in range(1, CYCLE_TRANSITION_ATTEMPTS + 1):
+        try:
+            return await action()
+        except (TransactionFailedError, MaxGasEstimationError) as error:
+            in_transition = "ECYCLE_TRANSITION_IN_PROGRESS" in str(error.vm_status)
+            if not in_transition or attempt == CYCLE_TRANSITION_ATTEMPTS:
+                raise
+            print("Automation cycle transition in progress, trying again")
+            await asyncio.sleep(CYCLE_TRANSITION_PAUSE_SECONDS)
+    raise AssertionError("unreachable")
+
+
+async def main() -> None:
+    supra_client = SupraClient(RPC_NODE_URL)
     sender = Account.generate()
     print(f"Automation task creator account address: {sender.address()}")
 
-    await supra_client.faucet(sender.address())
-    print(f"Faucet on {sender.address()} done")
+    await fund_accounts(supra_client, [sender.address()])
 
-    print("Registering automation tasK")
+    print("Registering automation task")
     automated_function = EntryFunction.natural(
         "0x1::supra_account",
         "transfer",
@@ -49,14 +67,21 @@ async def main():
         max(gas_prices["min_configured_gas_price"], gas_prices["median_gas_price"]),
         gas_prices["max_gas_price"],
     )
-    task_registration_tx_hash = await supra_client.register_automation_task(
-        sender,
-        automated_function,
-        9,
-        gas_price_cap,
-        1 * (10**8),
-        int(time.time()) + 7200,
-        [],
+    # The registry refuses a task whose duration from the block time of its
+    # registration exceeds `task_duration_cap_in_secs` of
+    # `0x1::automation_registry::ActiveAutomationRegistryConfigV2` (7200 seconds on a
+    # localnet), and a task that expires before the end of the next automation cycle.
+    expiry_time = int(time.time()) + TASK_DURATION_SECONDS
+    task_registration_tx_hash = await outside_cycle_transition(
+        lambda: supra_client.register_automation_task(
+            sender,
+            automated_function,
+            9,
+            gas_price_cap,
+            1 * (10**8),
+            expiry_time,
+            [],
+        )
     )
 
     # The registration already succeeded (the helper raised otherwise); fetch its events to read the task index.
@@ -74,7 +99,9 @@ async def main():
     print(f"Task registered successfully, task_id: {task_index}")
 
     print(f"Stopping task, task_index: {task_index}")
-    await supra_client.stop_automation_tasks(sender, [int(task_index)])
+    await outside_cycle_transition(
+        lambda: supra_client.stop_automation_tasks(sender, [int(task_index)])
+    )
     print(f"Task stopped successfully, task_index: {task_index}")
 
     await supra_client.close()

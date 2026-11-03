@@ -3,17 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-import os
+from pathlib import Path
 
-import aiofiles
-
-from examples.common import RPC_NODE_URL
+from examples.common import RPC_NODE_URL, fund_accounts
 from supra_sdk.account import Account
 from supra_sdk.clients.rest import SupraClient
 from supra_sdk.transactions import Script, ScriptArgument, TransactionPayload
 
+SCRIPT_PATH = Path(__file__).parent / "two_by_two_transfer.mv"
 
-async def main():
+
+async def main() -> None:
     supra_client = SupraClient(RPC_NODE_URL)
 
     alice = Account.generate()
@@ -26,10 +26,10 @@ async def main():
     print(f"Carol account address: {carol.address()}")
     print(f"David account address: {david.address()}")
 
-    await supra_client.faucet(alice.address())
-    await supra_client.faucet(bob.address())
-    await supra_client.faucet(carol.address())
-    await supra_client.faucet(david.address())
+    await fund_accounts(
+        supra_client,
+        [alice.address(), bob.address(), carol.address(), david.address()],
+    )
 
     alice_balance = await supra_client.account_supra_balance(alice.address())
     bob_balance = await supra_client.account_supra_balance(bob.address())
@@ -42,10 +42,7 @@ async def main():
     print(f"Carol: {carol_balance}")
     print(f"David: {david_balance}")
 
-    path = os.path.dirname(__file__)
-    filepath = os.path.join(path, "two_by_two_transfer.mv")
-    async with aiofiles.open(filepath, mode="rb") as file:
-        code = await file.read()
+    code = SCRIPT_PATH.read_bytes()
 
     script_arguments = [
         ScriptArgument(ScriptArgument.U64, 100),
@@ -72,7 +69,6 @@ async def main():
     print(f"Carol: {carol_balance}")
     print(f"David: {david_balance}")
 
-    await supra_client.close()
     await supra_client.close()
 
 
