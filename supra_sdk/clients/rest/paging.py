@@ -15,6 +15,7 @@ def next_cursor(
     *,
     sent: Any = None,
     zero_continues: bool = False,
+    only_missing_header_ends: bool = False,
 ) -> str | None:
     """Reads the cursor of the next page from the `x-supra-cursor` response header, or `None` when the response ends
     the feed.
@@ -35,6 +36,10 @@ def next_cursor(
     the `"0"`, and the next request continues with `start=0`. On a feed without rows the node answers that request
     with `"0"` again, which the rule for the request's own cursor ends, so this costs at most one more request.
 
+    A feed that only v12 nodes serve (account history) ends only when the header is absent or empty:
+    `only_missing_header_ends` returns any other header unchanged, on an empty page too, `"0"` and the request's own
+    cursor included.
+
     Args:
         response (httpx.Response): Response of a paged request.
         page (list[Any]): The items of the page the response carried.
@@ -43,6 +48,8 @@ def next_cursor(
         zero_continues (bool): True when the request had no cursor, was ascending and carried a `type` filter on a
             feed whose cursor `"0"` can be the position of a genesis row (coin and fungible asset transactions).
             Default to False.
+        only_missing_header_ends (bool): True for a feed that ends only by omitting the header, a feed that only
+            v12 nodes serve. `sent` and `zero_continues` are then not used. Default to False.
 
     Returns:
         str | None: The cursor to pass back to read the next page, or `None` when the feed has ended.
@@ -51,7 +58,7 @@ def next_cursor(
     cursor = response.headers.get(CURSOR_HEADER, "")
     if not cursor.strip():
         return None
-    if page:
+    if page or only_missing_header_ends:
         return cursor
     if cursor == "0" and zero_continues:
         return cursor

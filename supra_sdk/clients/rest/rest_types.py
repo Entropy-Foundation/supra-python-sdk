@@ -159,6 +159,7 @@ ACCOUNT_COIN_TRANSACTIONS_ENDPOINT = (
 ACCOUNT_AUTOMATED_TRANSACTIONS_ENDPOINT = (
     f"{RPC_API_PREFIX}/accounts/{{account_address}}/automated_transactions"
 )
+ACCOUNT_HISTORY_ENDPOINT = f"{RPC_API_PREFIX}/accounts/{{account_address}}/history"
 
 # Transaction endpoints
 CHAIN_ID_ENDPOINT = f"{RPC_API_PREFIX}/transactions/chain_id"
@@ -335,6 +336,26 @@ class EventsPagination:
         if not _is_unset(self.start):
             params["start"] = self.start
         return params
+
+
+class AccountHistoryCategory(str, Enum):
+    """The categories an entry of an account's history can match, used as the `categories` filter of
+    `AccountRestClient.account_history`.
+
+    Attributes:
+        SENT (str): The account sent the transaction.
+        COIN (str): The transaction withdrew coins from or deposited coins to the account.
+        FA (str): The transaction withdrew from or deposited to a fungible asset store the account owned at that
+            point in its block.
+        DA (str): A digital asset or object event of the transaction names the account: a `0x4` collection or token
+            event, an `0x1::object` transfer, or a legacy `0x3` token event.
+
+    """
+
+    SENT = "sent"
+    COIN = "coin"
+    FA = "fa"
+    DA = "da"
 
 
 class TransactionType(str, Enum):

@@ -10,8 +10,10 @@ import httpx
 
 from supra_sdk.account_address import AccountAddress
 from supra_sdk.clients import ApiClient
+from supra_sdk.clients.api_client import ApiError
 from supra_sdk.clients.rest.paging import next_cursor, paginate
 from supra_sdk.clients.rest.rest_types import (
+    AccountHistoryCategory,
     AutomatedTransactionsPagination,
     EventsPagination,
     Pagination,
@@ -124,6 +126,24 @@ class NextCursorTests(unittest.TestCase):
 
     def test_empty_sent_cursor_counts_as_none(self):
         self.assertEqual(next_cursor(self.response({CURSOR: "c"}), [], sent=""), "c")
+
+    def test_only_missing_header_ends_keeps_every_present_cursor(self):
+        for cursor in ("0", "abcd", "5"):
+            self.assertEqual(
+                next_cursor(
+                    self.response({CURSOR: cursor}),
+                    [],
+                    sent="abcd",
+                    only_missing_header_ends=True,
+                ),
+                cursor,
+            )
+        self.assertIsNone(
+            next_cursor(self.response({}), [], only_missing_header_ends=True)
+        )
+        self.assertIsNone(
+            next_cursor(self.response({CURSOR: ""}), [], only_missing_header_ends=True)
+        )
 
 
 class CursorReturnTests(unittest.IsolatedAsyncioTestCase):
@@ -496,6 +516,106 @@ class TypedAscendingFeedTests(unittest.IsolatedAsyncioTestCase):
         items = await collect(self.feed({None: page([1], "7"), "7": page([], "0")}))
         self.assertEqual(items, [1])
         self.assertEqual(self.sent, [None, "7"])
+
+
+class AccountHistoryTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncTearDown(self):
+        await self.node.close()
+
+    async def test_requests_the_history_route_with_the_options(self):
+        self.node = await FakeNode.create(lambda _: page([], None))
+        await self.node.client.account_history(
+            "0x1",
+            PaginationWithOrder(count=50, start="12", ascending=True),
+            [AccountHistoryCategory.SENT, "fa"],
+        )
+        self.assertEqual(self.node.requests[0].url.path, "/rpc/v3/accounts/0x1/history")
+        self.assertEqual(
+            self.node.params(0),
+            {
+                "count": "50",
+                "start": "12",
+                "ascending": "true",
+                "categories": "sent,fa",
+            },
+        )
+
+    async def test_sends_no_options_by_default(self):
+        self.node = await FakeNode.create(lambda _: page([], None))
+        await self.node.client.account_history(ADDRESS)
+        self.assertEqual(self.node.params(0), {})
+
+    async def test_a_single_category_is_accepted(self):
+        self.node = await FakeNode.create(lambda _: page([], None))
+        await self.node.client.account_history(ADDRESS, categories="coin")
+        await self.node.client.account_history(
+            ADDRESS, categories=AccountHistoryCategory.DA
+        )
+        self.assertEqual(self.node.params(0), {"categories": "coin"})
+        self.assertEqual(self.node.params(1), {"categories": "da"})
+
+    async def test_invalid_categories_are_rejected_before_a_request(self):
+        self.node = await FakeNode.create(lambda _: page([], None))
+        for categories in ([], ["sent", "automated"], "sent,fa", ["SENT"]):
+            with self.assertRaises(ValueError):
+                await self.node.client.account_history(ADDRESS, categories=categories)
+        self.assertEqual(self.node.requests, [])
+
+    async def test_only_a_missing_header_ends_a_page(self):
+        self.node = await FakeNode.create(lambda _: self.response)
+        client = self.node.client
+        self.response = page([], "0")
+        self.assertEqual(await client.account_history(ADDRESS), ([], "0"))
+        self.response = page([], "7")
+        self.assertEqual(
+            await client.account_history(ADDRESS, PaginationWithOrder(start="7")),
+            ([], "7"),
+        )
+        self.response = page([{"n": 1}], "0")
+        self.assertEqual(await client.account_history(ADDRESS), ([{"n": 1}], "0"))
+        self.response = page([{"n": 1}], None)
+        self.assertEqual(await client.account_history(ADDRESS), ([{"n": 1}], None))
+        self.response = page([], "")
+        self.assertEqual(await client.account_history(ADDRESS), ([], None))
+
+    async def test_a_node_without_the_route_raises_api_error(self):
+        self.node = await FakeNode.create(lambda _: httpx.Response(404))
+        with self.assertRaises(ApiError) as raised:
+            await self.node.client.account_history(ADDRESS)
+        self.assertEqual(raised.exception.status_code, 404)
+        self.assertEqual(raised.exception.message, "")
+
+    async def test_iterator_pages_past_an_empty_page_and_the_zero_cursor(self):
+        # The node filters by category while it scans: a page can be empty and carry a cursor, and "0" is the
+        # cursor of a genesis-block row.
+        pages = {
+            None: page([1], "9"),
+            "9": page([], "4"),
+            "4": page([], "0"),
+            "0": page([2], None),
+        }
+        self.node = await FakeNode.create(
+            lambda request: pages[request.url.params.get("start")]
+        )
+        items = await collect(
+            self.node.client.iter_account_history(
+                ADDRESS,
+                PaginationWithOrder(count=1),
+                (category for category in ["fa", "sent"]),
+            )
+        )
+        self.assertEqual(items, [1, 2])
+        self.assertEqual(len(self.node.requests), 4)
+        self.assertEqual(self.node.params(0), {"count": "1", "categories": "fa,sent"})
+        self.assertEqual(
+            self.node.params(3), {"count": "1", "start": "0", "categories": "fa,sent"}
+        )
+
+    async def test_iterator_stops_when_a_cursor_repeats(self):
+        self.node = await FakeNode.create(lambda _: page([], "0"))
+        items = await collect(self.node.client.iter_account_history(ADDRESS))
+        self.assertEqual(items, [])
+        self.assertEqual(len(self.node.requests), 2)
 
 
 class ReadObjectTests(unittest.IsolatedAsyncioTestCase):

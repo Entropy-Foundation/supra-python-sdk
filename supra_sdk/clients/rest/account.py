@@ -1,7 +1,7 @@
 # Copyright © Supra
 # SPDX-License-Identifier: Apache-2.0
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from dataclasses import replace
 from typing import Any
 
@@ -12,11 +12,13 @@ from supra_sdk.clients.rest.rest_types import (
     ACCOUNT_AUTOMATED_TRANSACTIONS_ENDPOINT,
     ACCOUNT_COIN_TRANSACTIONS_ENDPOINT,
     ACCOUNT_ENDPOINT,
+    ACCOUNT_HISTORY_ENDPOINT,
     ACCOUNT_MODULE_ENDPOINT,
     ACCOUNT_MODULES_ENDPOINT,
     ACCOUNT_RESOURCE_ENDPOINT,
     ACCOUNT_RESOURCES_ENDPOINT,
     ACCOUNT_TRANSACTIONS_ENDPOINT,
+    AccountHistoryCategory,
     AutomatedTransactionsPagination,
     Pagination,
     PaginationWithOrder,
@@ -321,3 +323,118 @@ class AccountRestClient(RestClient):
             pagination or AutomatedTransactionsPagination(),
             lambda p, cursor: replace(p, cursor=cursor),
         )
+
+    async def account_history(
+        self,
+        account_address: AccountAddress | str,
+        pagination: PaginationWithOrder | None = None,
+        categories: Iterable[AccountHistoryCategory | str] | None = None,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """Retrieves the history of an account: every finalized transaction that concerns the account, once each,
+        with the categories it matched for the account (`GET /rpc/v3/accounts/{address}/history`).
+
+        It lists the transfers of SUPRA held in primary fungible stores (category `fa`), which
+        `account_coin_transactions` does not.
+
+        Needs a node from `supra_node_v12.0.0`. A node before v12 (Testnet and Mainnet until they run v12) answers
+        HTTP 404 with an empty body, raised as `supra_sdk.clients.api_client.ApiError` with `status_code` 404 and an
+        empty `message`.
+
+        Automated transactions and automation registry records are not listed; use
+        `account_automated_transactions` for those. While the node sends the `x-supra-history-indexed-from` response
+        header, the history does not cover the blocks below the height it names: the node is indexing, or has not
+        indexed, the blocks it held before it kept the history.
+
+        Paging: the node applies `categories` while it scans the account's history and reads at most 8 rows for
+        each entry requested, so a page can hold fewer entries than `count`, or none, before the history is
+        exhausted. The history ends only when the response has no `x-supra-cursor` header, which the returned cursor
+        reports as `None`. An empty page with a cursor does not end it, and `"0"` is a valid cursor: the position of
+        a genesis-block row on a chain whose genesis timestamp is 0. Pass the returned cursor as
+        `PaginationWithOrder(start=cursor)` to read the next page.
+
+        Args:
+            account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.
+            pagination (PaginationWithOrder | None): Pagination options: `count` is the number of entries to scan
+                for (node default 20, at most 100), `start` the cursor of the previous page (exclusive) and
+                `ascending` the order (node default descending). Default to None.
+            categories (Iterable[AccountHistoryCategory | str] | None): Return only transactions that matched at
+                least one of these categories: `sent` (the account sent it), `coin` (coins moved in or out of the
+                account), `fa` (a fungible asset store the account owned moved), `da` (a digital asset or object
+                event names the account), as `AccountHistoryCategory` members or their string values. A single
+                category is accepted too. Default to None, which the node reads as all four.
+
+        Returns:
+            tuple[list[dict[str, Any]], str | None]: A tuple containing,
+                - list[dict[str, Any]]: The entries, each `{"categories": [...], "transaction": {...}}`, where
+                    `categories` lists the categories the transaction matched for the account, in the order `sent`,
+                    `coin`, `fa`, `da`, and `transaction` has the shape of a transaction in a block.
+                - str | None: Cursor to retrieve the next page, or `None` when the history has ended.
+
+        Raises:
+            ValueError: If `categories` is empty or names something other than `sent`, `coin`, `fa` or `da`.
+
+        """
+        endpoint = format_endpoint(
+            ACCOUNT_HISTORY_ENDPOINT, account_address=account_address
+        )
+        params = pagination.to_params() if pagination else {}
+        if categories is not None:
+            params["categories"] = _history_categories_param(categories)
+        response = await self.api_client.get(endpoint=endpoint, params=params)
+        page = response.json()
+        # The route exists only on v12 nodes, which end a feed by omitting the header; `"0"` is a cursor here.
+        return page, next_cursor(response, page, only_missing_header_ends=True)
+
+    def iter_account_history(
+        self,
+        account_address: AccountAddress | str,
+        pagination: PaginationWithOrder | None = None,
+        categories: Iterable[AccountHistoryCategory | str] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Iterates over the history of an account, requesting further pages until the history ends.
+
+        The iteration ends when a response has no `x-supra-cursor` header, or when the node repeats a cursor. An
+        empty page with a cursor and the cursor `"0"` do not end it. See `account_history` for the node release it
+        needs and what the history covers.
+
+        Args:
+            account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.
+            pagination (PaginationWithOrder | None): Pagination options of the first request; `count` sets the page
+                size, `start` the cursor to begin from and `ascending` the order. Default to None.
+            categories (Iterable[AccountHistoryCategory | str] | None): Categories to return transactions of, as for
+                `account_history`. Default to None, which the node reads as all four.
+
+        Returns:
+            AsyncIterator[dict[str, Any]]: The entries `{"categories": [...], "transaction": {...}}`, in the
+                requested order.
+
+        """
+        if categories is not None and not isinstance(categories, str):
+            categories = tuple(categories)
+        return paginate(
+            lambda p: self.account_history(account_address, p, categories),
+            pagination or PaginationWithOrder(),
+            lambda p, cursor: replace(p, start=cursor),
+        )
+
+
+def _history_categories_param(
+    categories: Iterable[AccountHistoryCategory | str],
+) -> str:
+    """The `categories` query parameter of `account_history`: the category names, comma separated.
+
+    Raises:
+        ValueError: If `categories` is empty or names something other than `sent`, `coin`, `fa` or `da`.
+
+    """
+    selected = [categories] if isinstance(categories, str) else categories
+    names = []
+    for category in selected:
+        try:
+            names.append(AccountHistoryCategory(category).value)
+        except ValueError as e:
+            valid = ", ".join(c.value for c in AccountHistoryCategory)
+            raise ValueError(f"categories must name only {valid}: {category!r}") from e
+    if not names:
+        raise ValueError("categories must name at least one category")
+    return ",".join(names)
