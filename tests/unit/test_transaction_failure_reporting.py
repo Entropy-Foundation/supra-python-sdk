@@ -274,7 +274,7 @@ class TestTransactionFailureReporting(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(node.poll_count, 1)
 
     async def test_faucet_request_not_accepted(self):
-        client = await self.make_client(lambda _: httpx.Response(200, json={}))
+        client = await self.make_client(lambda _: httpx.Response(200, json="TryLater"))
         with self.assertRaises(FaucetRequestNotAcceptedError):
             await client.faucet(AccountAddress.from_str("0x1"))
 

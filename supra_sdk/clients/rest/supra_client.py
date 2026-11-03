@@ -1108,14 +1108,15 @@ class SupraClient(
             wait_for_faucet (bool): Flag indicates whether wait for faucet should be done or not. Default to True.
 
         Returns:
-            str | None: Faucet transaction hash if faucet request is accepted else None.
+            str | None: The faucet transaction hash when the node answers `Accepted`; None when it answers
+                `"TryLater"` and `wait_for_faucet` is False.
 
         Raises:
-            FaucetRequestNotAcceptedError: If waiting is requested and the faucet did not accept the request.
+            FaucetRequestNotAcceptedError: If waiting is requested and the node answers `"TryLater"`.
             ApiRateLimitError: If the address is inside the cooldown after its last grant or has reached the daily
                 number of grants (429).
-            UnexpectedResponseError: If the node answers 200 with a body that is neither a JSON object nor
-                `"TryLater"`.
+            UnexpectedResponseError: If the node answers 200 with a body that is neither `"TryLater"` nor a JSON
+                object whose `Accepted` is a non-empty string.
             TransactionFailedError: If waiting is requested and the final status of the faucet transaction is not
                 `Success`.
             TransactionWaitTimeoutReachedError: If waiting is requested and the faucet transaction is not final within

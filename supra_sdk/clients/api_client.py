@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import contextlib
 import json
 import math
 import re
@@ -34,6 +35,9 @@ _RETRYABLE_STATUSES = frozenset(
 )
 
 _DECIMAL = re.compile(r"[0-9]+")
+
+# Beyond 64 doublings any base delay above zero exceeds every useful `max_delay_seconds`.
+_MAX_BACKOFF_DOUBLINGS = 64
 
 # Indirection so that tests can replace the wait between attempts.
 _sleep = asyncio.sleep
@@ -83,7 +87,9 @@ class RetryPolicy:
 
     def backoff_seconds(self, attempt: int) -> float:
         """The wait before repeating attempt number `attempt` (counted from 1) when the response asks for none."""
-        return min(self.max_delay_seconds, self.base_delay_seconds * 2 ** (attempt - 1))
+        # The exponent is capped so that a large `attempts` cannot overflow a float.
+        doublings = min(attempt - 1, _MAX_BACKOFF_DOUBLINGS)
+        return min(self.max_delay_seconds, self.base_delay_seconds * 2.0**doublings)
 
 
 @dataclass
@@ -325,8 +331,13 @@ class ApiClient:
     def _timeout_error(
         self, url: str, error: httpx.TimeoutException
     ) -> "ClientTimeoutError":
+        try:
+            request: httpx.Request | None = error.request
+        except RuntimeError:
+            # httpx attaches the request to errors raised while sending one; this covers any it did not.
+            request = None
         return ClientTimeoutError(
-            url, self.api_client_config.timeout, type(error).__name__
+            url, self.api_client_config.timeout, type(error).__name__, request=request
         )
 
 
@@ -340,7 +351,7 @@ class ApiError(Exception):
     - `ApiGoneError`: 410, with `oldest_block`.
     - `ApiRateLimitError`: 429, with `retry_after_seconds`.
     - `ApiServiceUnavailableError`: 503.
-    - `UnexpectedResponseError`: a 200 response whose body does not have the expected shape.
+    - `UnexpectedResponseError`: a 200 response to `view` or `faucet` whose body does not have the expected shape.
 
     A request that exceeds the client's timeout raises `ClientTimeoutError`, which is not an `ApiError`.
 
@@ -386,7 +397,8 @@ class ApiNotFoundError(ApiError):
     """Exception raised when the API returns 404: the requested account, resource, module, transaction or route is
     not available on the node.
 
-    Nodes before `supra_node_v12.0.0` answer a missing account or resource with 400 instead, which raises `ApiError`.
+    Nodes before `supra_node_v12.0.0` answer a missing account with 400 instead, which raises `ApiError`; they answer
+    a missing resource with 404.
     """
 
 
@@ -425,11 +437,11 @@ class ApiGoneError(ApiError):
         """
         super().__init__(message, status_code, headers, body)
         value = self.headers.get(OLDEST_BLOCK_HEADER)
-        self.oldest_block = (
-            int(value)
-            if value is not None and _DECIMAL.fullmatch(value.strip())
-            else None
-        )
+        self.oldest_block = None
+        if value is not None and _DECIMAL.fullmatch(value.strip()):
+            # ValueError: more digits than `int` converts (`sys.get_int_max_str_digits`).
+            with contextlib.suppress(ValueError):
+                self.oldest_block = int(value)
 
 
 class ApiRateLimitError(ApiError):
@@ -510,7 +522,7 @@ class ClientTimeoutError(httpx.TimeoutException):
     connection from the pool, writing or reading.
 
     It is a `httpx.TimeoutException`, the error raised before this class existed, and not an `ApiError`: the server
-    sent no response.
+    sent no response. Like the `httpx` error it replaces, it carries the request as `request`.
 
     Attributes:
         url (str): The request URL, without query parameters.
@@ -524,20 +536,37 @@ class ClientTimeoutError(httpx.TimeoutException):
     timeout_seconds: float
     phase: str
 
-    def __init__(self, url: str, timeout_seconds: float, phase: str):
+    def __init__(
+        self,
+        url: str,
+        timeout_seconds: float,
+        phase: str,
+        *,
+        request: httpx.Request | None = None,
+    ):
         """Initialize the exception with the request URL, the timeout and the phase that timed out.
 
         Args:
             url (str): The request URL, without query parameters.
             timeout_seconds (float): The timeout that was exceeded.
             phase (str): Name of the `httpx` timeout that was raised.
+            request (httpx.Request | None): The request that timed out. Default to None.
 
         """
         self.url = url
         self.timeout_seconds = timeout_seconds
         self.phase = phase
         super().__init__(
-            f"Request to {url} timed out after {timeout_seconds} seconds ({phase})"
+            f"Request to {url} timed out after {timeout_seconds} seconds ({phase})",
+            request=request,
+        )
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        # The arguments of `__init__` differ from `self.args`, which holds the message only.
+        return (
+            type(self),
+            (self.url, self.timeout_seconds, self.phase),
+            self.__dict__,
         )
 
 
@@ -593,27 +622,23 @@ def retry_after_seconds(data: Any, headers: Mapping[str, str]) -> float | None:
     """
     if isinstance(data, dict):
         value = data.get("retry_after_seconds")
-        if isinstance(value, str):
-            try:
-                value = float(value)
-            except ValueError:
-                value = None
-        if isinstance(value, int | float) and _is_non_negative_number(value):
-            return float(value)
+        seconds = _seconds(value.strip() if isinstance(value, str) else value)
+        if seconds is not None:
+            return seconds
 
     header = httpx.Headers(headers).get("retry-after")
     if header is None:
         return None
     header = header.strip()
     if _DECIMAL.fullmatch(header):
-        return float(header)
+        return _seconds(header)
     try:
         date = parsedate_to_datetime(header)
-    except (TypeError, ValueError):
+        if date.tzinfo is None:
+            date = date.replace(tzinfo=UTC)
+        return float(max(0, math.ceil(date.timestamp() - time.time())))
+    except (TypeError, ValueError, OverflowError):
         return None
-    if date.tzinfo is None:
-        date = date.replace(tzinfo=UTC)
-    return float(max(0, math.ceil(date.timestamp() - time.time())))
 
 
 def _error_message(body: str, status_code: int) -> str:
@@ -631,19 +656,26 @@ def _error_message(body: str, status_code: int) -> str:
 
 
 def _json_or_none(text: str) -> Any:
+    # A body nested deeper than the interpreter's recursion limit raises RecursionError.
     try:
         return json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
 
 
+def _seconds(value: Any) -> float | None:
+    """`value` as a finite, non-negative number of seconds: from an int or a float, or a str in `float` syntax."""
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        return None
+    try:
+        seconds = float(value)
+    except (ValueError, OverflowError):
+        return None
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None
+
+
 def _is_non_negative_number(value: Any) -> bool:
-    return (
-        isinstance(value, int | float)
-        and not isinstance(value, bool)
-        and math.isfinite(value)
-        and value >= 0
-    )
+    return not isinstance(value, str) and _seconds(value) is not None
 
 
 def _request_url(response: httpx.Response) -> str:

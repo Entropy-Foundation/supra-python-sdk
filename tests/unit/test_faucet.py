@@ -30,11 +30,11 @@ class FaucetTests(unittest.IsolatedAsyncioTestCase):
         self, *responses: httpx.Response, config: SupraClientConfig | None = None
     ) -> SupraClient:
         self.requests: list[httpx.Request] = []
-        queue = list(responses)
+        self.queue = list(responses)
 
         def handler(request: httpx.Request) -> httpx.Response:
             self.requests.append(request)
-            return queue.pop(0) if len(queue) > 1 else queue[0]
+            return self.queue.pop(0) if len(self.queue) > 1 else self.queue[0]
 
         client = SupraClient("http://node.invalid/", config)
         api_client_config = client.api_client.api_client_config
@@ -64,12 +64,25 @@ class FaucetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await client.faucet(ADDRESS, wait_for_faucet=False), tx_hash)
 
     async def test_unexpected_body_raises(self):
-        for body in ("Something", 5, ["Accepted"]):
-            with self.subTest(body=body):
-                client = await self.make_client(httpx.Response(200, json=body))
-                with self.assertRaises(UnexpectedResponseError) as ctx:
-                    await client.faucet(ADDRESS, wait_for_faucet=False)
-                self.assertEqual(ctx.exception.field, "Accepted")
+        bodies = [
+            httpx.Response(200, json="Something"),
+            httpx.Response(200, json=5),
+            httpx.Response(200, json=["Accepted"]),
+            httpx.Response(200, json={}),
+            httpx.Response(200, json={"Accepted": ""}),
+            httpx.Response(200, json={"Accepted": 5}),
+            httpx.Response(200, json={"Accepted": None}),
+            httpx.Response(200, text="<html>gateway</html>"),
+            httpx.Response(200, text="[" * 100_000),
+        ]
+        client = await self.make_client(bodies[0])
+        for response in bodies:
+            for wait_for_faucet in (False, True):
+                with self.subTest(body=response.text[:40], wait=wait_for_faucet):
+                    self.queue = [response]
+                    with self.assertRaises(UnexpectedResponseError) as ctx:
+                        await client.faucet(ADDRESS, wait_for_faucet=wait_for_faucet)
+                    self.assertEqual(ctx.exception.field, "Accepted")
 
     async def test_rate_limit_is_typed(self):
         # The node's body for an address inside the cooldown; the gateway may add `retry_after_seconds`.

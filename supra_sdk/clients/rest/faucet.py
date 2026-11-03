@@ -36,25 +36,27 @@ class FaucetRestClient(RestClient):
                 or a hex string.
 
         Returns:
-            str | None: Faucet transaction hash if faucet request is accepted else None.
+            str | None: The faucet transaction hash when the node answers `Accepted`, None when it answers
+                `"TryLater"`.
 
         Raises:
             ApiRateLimitError: If the address is inside the cooldown after its last grant or has reached the daily
                 number of grants (429).
             ApiError: If the node answers with a status other than 200, for example 400 when the account's
                 SUPRA balance is at or above the faucet's cap.
-            UnexpectedResponseError: If the node answers 200 with a body that is neither a JSON object nor
-                `"TryLater"`.
+            UnexpectedResponseError: If the node answers 200 with a body that is neither `"TryLater"` nor a JSON
+                object whose `Accepted` is a non-empty string, including a body that is not JSON.
 
         """
         endpoint = format_endpoint(FAUCET_ENDPOINT, address=address)
         response = await self.api_client.get(endpoint=endpoint, retryable=False)
-        res_data = response.json()
+        res_data = self._response_json(response, "Accepted")
         if res_data == _FAUCET_TRY_LATER:
             return None
-        if not isinstance(res_data, dict):
+        accepted = res_data.get("Accepted") if isinstance(res_data, dict) else None
+        if not isinstance(accepted, str) or not accepted:
             raise UnexpectedResponseError("Accepted", response)
-        return res_data.get("Accepted", None)
+        return accepted
 
     async def faucet_transaction_by_hash(self, tx_hash: str) -> dict[str, Any]:
         """Retrieves details of a faucet transaction by its hash.

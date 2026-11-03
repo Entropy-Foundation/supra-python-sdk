@@ -31,8 +31,9 @@ statuses raise a subclass of `ApiError`:
 | 429 | `ApiRateLimitError` | `retry_after_seconds`, from the body or the `Retry-After` header |
 | 503 | `ApiServiceUnavailableError` | |
 
-A 200 response without a field the SDK reads raises `UnexpectedResponseError`, which is also a `KeyError`. A request
-that exceeds the timeout raises `ClientTimeoutError`, which is a `httpx.TimeoutException`.
+`view()` and `faucet()` raise `UnexpectedResponseError`, which is also a `KeyError`, when a 200 response does not
+have the field they read (`result` and `Accepted`). A request that exceeds the timeout raises `ClientTimeoutError`,
+which is a `httpx.TimeoutException` and carries the request as `request`.
 
 Each phase of a request (connecting, waiting for a pooled connection, writing, reading) is limited to 60 seconds;
 `timeout` changes the limit. GET requests are repeated after a 408, 429 or 503 response or a timeout only when

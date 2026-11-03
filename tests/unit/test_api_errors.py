@@ -3,6 +3,7 @@
 
 """Offline tests for the typed HTTP errors, the request timeout and the GET retry policy."""
 
+import pickle
 import unittest
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -199,6 +200,39 @@ class ErrorTypeTests(ClientTestCase):
                 assert isinstance(error, ApiGoneError)
                 self.assertEqual(error.oldest_block, expected)
 
+    async def test_deeply_nested_body_is_kept_as_text(self):
+        body = "[" * 100_000
+        for status in (500, 429):
+            with self.subTest(status=status):
+                error = await self.error_for(httpx.Response(status, text=body))
+                self.assertEqual(error.message, body)
+        error = await self.error_for(httpx.Response(429, text=body))
+        assert isinstance(error, ApiRateLimitError)
+        self.assertIsNone(error.retry_after_seconds)
+
+    async def test_out_of_range_numbers_are_ignored(self):
+        huge = "1" + "0" * 400
+        cases = [
+            ('{"retry_after_seconds": ' + huge + "}", {}, None),
+            ('{"retry_after_seconds": ' + "1" * 5000 + "}", {}, None),
+            ('{"retry_after_seconds": "1e999"}', {}, None),
+            ('{"retry_after_seconds": ' + huge + "}", {"Retry-After": "4"}, 4),
+            ("{}", {"Retry-After": "9" * 500}, None),
+            ("{}", {"Retry-After": "Fri, 31 Dec 99999 23:59:59 GMT"}, None),
+        ]
+        for body, headers, expected in cases:
+            with self.subTest(body=body[:40], headers=headers):
+                error = await self.error_for(
+                    httpx.Response(429, text=body, headers=headers)
+                )
+                assert isinstance(error, ApiRateLimitError)
+                self.assertEqual(error.retry_after_seconds, expected)
+        error = await self.error_for(
+            httpx.Response(410, text="{}", headers={"x-supra-oldest-block": "9" * 5000})
+        )
+        assert isinstance(error, ApiGoneError)
+        self.assertIsNone(error.oldest_block)
+
     async def test_error_built_without_a_response(self):
         error = ApiError("text", 400)
         self.assertEqual(error.body, "text")
@@ -254,9 +288,9 @@ class TimeoutTests(ClientTestCase):
         self.assertEqual(client._client.timeout.pool, 60)
 
     async def test_invalid_timeout_is_rejected(self):
-        for value in (0, -1, float("inf"), float("nan"), True):
+        for value in (0, -1, float("inf"), float("nan"), True, 10**400, "5"):
             with self.subTest(value=value), self.assertRaises(ValueError):
-                ApiClient("http://node.invalid/", ApiClientConfig(timeout=value))
+                ApiClient("http://node.invalid/", ApiClientConfig(timeout=value))  # type: ignore[arg-type]
 
     async def test_timeout_raises_client_timeout_error(self):
         node = Node(httpx.ReadTimeout("read timed out"))
@@ -267,6 +301,34 @@ class TimeoutTests(ClientTestCase):
         self.assertEqual(ctx.exception.timeout_seconds, 2)
         self.assertEqual(ctx.exception.phase, "ReadTimeout")
         self.assertEqual(len(node.requests), 1)
+
+    async def test_timeout_error_keeps_the_request(self):
+        node = Node(httpx.ReadTimeout("read timed out"))
+        client = await self.make_client(node)
+        with self.assertRaises(httpx.TimeoutException) as ctx:
+            await client.account(ADDRESS)
+        self.assertIs(ctx.exception.request, node.requests[0])
+        self.assertEqual(
+            str(ctx.exception.request.url), "http://node.invalid/rpc/v3/accounts/0x1"
+        )
+
+    async def test_timeout_error_pickles(self):
+        node = Node(httpx.ReadTimeout("read timed out"))
+        client = await self.make_client(node, SupraClientConfig(timeout=2))
+        with self.assertRaises(ClientTimeoutError) as ctx:
+            await client.account(ADDRESS)
+        restored = pickle.loads(pickle.dumps(ctx.exception))
+        self.assertIsInstance(restored, ClientTimeoutError)
+        self.assertEqual(str(restored), str(ctx.exception))
+        self.assertEqual(restored.url, ctx.exception.url)
+        self.assertEqual(restored.timeout_seconds, 2)
+        self.assertEqual(restored.phase, "ReadTimeout")
+        self.assertEqual(restored.request.url, ctx.exception.request.url)
+        without_request = ClientTimeoutError("http://x/", 1, "PoolTimeout")
+        restored = pickle.loads(pickle.dumps(without_request))
+        self.assertEqual(str(restored), str(without_request))
+        with self.assertRaises(RuntimeError):
+            _ = restored.request
 
     async def test_post_timeout_raises_client_timeout_error(self):
         node = Node(httpx.ConnectTimeout("connect timed out"))
@@ -323,15 +385,43 @@ class RetryTests(ClientTestCase):
         self.assertEqual(len(node.requests), 4)
         self.assertEqual(sleeps.delays, [1, 2, 3])
 
-    async def test_timeouts_are_bounded(self):
-        self.patch_sleep()
+    async def test_timeouts_are_bounded_and_no_wait_follows_the_last(self):
+        sleeps = self.patch_sleep()
         node = Node(httpx.ReadTimeout("read timed out"))
         client = await self.make_client(
-            node, SupraClientConfig(retry=RetryPolicy(attempts=2))
+            node, SupraClientConfig(retry=RetryPolicy(attempts=3))
         )
         with self.assertRaises(ClientTimeoutError):
             await client.account(ADDRESS)
-        self.assertEqual(len(node.requests), 2)
+        self.assertEqual(len(node.requests), 3)
+        self.assertEqual(sleeps.delays, [0.25, 0.5])
+
+    async def test_backoff_of_a_large_attempt_number_is_capped(self):
+        policy = RetryPolicy(attempts=10**6, max_delay_seconds=7)
+        self.assertEqual(policy.backoff_seconds(10**6), 7)
+        self.assertEqual(RetryPolicy(base_delay_seconds=0).backoff_seconds(10**6), 0)
+
+    async def test_retry_after_on_a_503_is_honoured(self):
+        sleeps = self.patch_sleep()
+        node = Node(
+            httpx.Response(503, json={"message": "m"}, headers={"Retry-After": "3"}),
+            httpx.Response(200, json=ACCOUNT),
+        )
+        client = await self.make_client(node, SupraClientConfig(retry=RetryPolicy()))
+        self.assertEqual(await client.account(ADDRESS), ACCOUNT)
+        self.assertEqual(sleeps.delays, [3])
+
+    async def test_http_date_retry_after_is_honoured(self):
+        sleeps = self.patch_sleep()
+        date = format_datetime(datetime.now(UTC) + timedelta(seconds=5), usegmt=True)
+        node = Node(
+            httpx.Response(429, json={"message": "m"}, headers={"Retry-After": date}),
+            httpx.Response(200, json=ACCOUNT),
+        )
+        client = await self.make_client(node, SupraClientConfig(retry=RetryPolicy()))
+        self.assertEqual(await client.account(ADDRESS), ACCOUNT)
+        self.assertEqual(len(sleeps.delays), 1)
+        self.assertTrue(3 <= sleeps.delays[0] <= 6)
 
     async def test_retry_after_is_honoured(self):
         sleeps = self.patch_sleep()

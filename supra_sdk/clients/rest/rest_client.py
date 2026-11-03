@@ -32,6 +32,19 @@ class RestClient:
         self.api_client = api_client
 
     @staticmethod
+    def _response_json(response: httpx.Response, field: str) -> Any:
+        """Returns the parsed JSON body of `response`, which is expected to hold `field`.
+
+        Raises:
+            UnexpectedResponseError: If the body is not JSON.
+
+        """
+        try:
+            return response.json()
+        except (ValueError, RecursionError):
+            raise UnexpectedResponseError(field, response) from None
+
+    @staticmethod
     def _response_field(response: httpx.Response, field: str) -> Any:
         """Returns `field` of the JSON object in the body of `response`.
 
@@ -39,10 +52,7 @@ class RestClient:
             UnexpectedResponseError: If the body is not a JSON object with `field`.
 
         """
-        try:
-            data = response.json()
-        except ValueError:
-            raise UnexpectedResponseError(field, response) from None
+        data = RestClient._response_json(response, field)
         if not isinstance(data, dict) or field not in data:
             raise UnexpectedResponseError(field, response)
         return data[field]
