@@ -114,13 +114,18 @@ class GeneralRestClient(RestClient):
 
         Returns:
             dict[str, Any]: The node's response, with these fields:
-                - version (str): Version of the node's RPC API crate, e.g. '0.5.0'.
-                - release (str): Release tag of the node, e.g. 'supra_node_v12.0.0'. Sent by nodes from
-                  `supra_node_v12.0.0`; the key is absent from the response of an earlier node.
-                - branch (str): Git branch the node was built from. May be an empty string.
-                - commit_hash (str): Git commit the node was built from.
-                - build_time (str): Time of the build.
-                - build_env (str): Rust toolchain that built the node.
+                - version (str): Version of the node's Rust packages, e.g. '0.5.0'. It is the same for every
+                  release; use `release` to identify the release.
+                - release (str): Release tag the node binary was built from, e.g. 'supra_node_v12.0.0', or
+                  'supra_node_v12.0.0.rc6' for a release candidate. 'unreleased' for a binary built from a commit
+                  that is not a release. The key is absent from the response of a node before
+                  `supra_node_v12.0.0`.
+                - branch (str): Git branch used for the build. Empty when the build was made from a tag or the
+                  branch was not recorded.
+                - commit_hash (str): Full git commit hash the binary was built from. Empty when the build did not
+                  record it.
+                - build_time (str): Build timestamp.
+                - build_env (str): Rust toolchain used to build the binary.
 
         """
         return (await self.api_client.get(endpoint=VERSION_ENDPOINT)).json()
