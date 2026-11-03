@@ -666,6 +666,9 @@ class AutomationRegistrationParamsV2:
     priority is treated the same way. A system task can only be registered by an
     account the registry has authorised.
 
+    ``deserialize`` accepts a user task with a priority, so the payload of a
+    refused registration can be read from the chain's history.
+
     Raises:
         ValueError: If ``priority`` is given with ``AutomationTaskType.USER``, or
             is outside the range of a ``u64``.
@@ -681,12 +684,20 @@ class AutomationRegistrationParamsV2:
         aux_data: list[bytes],
         task_type: AutomationTaskType = AutomationTaskType.USER,
         priority: int | None = None,
+        *,
+        _decoding: bool = False,
     ):
+        # `_decoding` is set only by `deserialize`: a registration the registry refused
+        # is still a committed transaction, and its payload must be readable.
         if not isinstance(task_type, AutomationTaskType):
             raise TypeError("task_type must be an AutomationTaskType")
         if priority is not None and not 0 <= priority <= MAX_U64:
             raise ValueError("priority must be from 0 to 2^64 - 1")
-        if priority is not None and task_type is AutomationTaskType.USER:
+        if (
+            not _decoding
+            and priority is not None
+            and task_type is AutomationTaskType.USER
+        ):
             raise ValueError(_USER_TASK_PRIORITY_MESSAGE)
         self.automated_function = automated_function
         self.max_gas_amount = max_gas_amount
@@ -722,6 +733,7 @@ class AutomationRegistrationParamsV2:
             aux_data,
             task_type,
             priority,
+            _decoding=True,
         )
 
     def serialize(self, serializer: Serializer) -> None:

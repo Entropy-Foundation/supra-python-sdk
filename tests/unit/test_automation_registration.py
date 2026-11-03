@@ -115,11 +115,13 @@ class TestAutomationRegistrationParamsBcs(unittest.TestCase):
                 10,
             )
 
-    def test_v2_user_with_priority_does_not_deserialize(self):
-        with self.assertRaisesRegex(ValueError, "system tasks only"):
-            AutomationRegistrationParams.deserialize(
-                Deserializer(bytes.fromhex(V2_USER_10))
-            )
+    def test_v2_user_with_priority_deserializes_and_round_trips(self):
+        params = AutomationRegistrationParams.deserialize(
+            Deserializer(bytes.fromhex(V2_USER_10))
+        )
+        self.assertEqual(params.registration_params.task_type, AutomationTaskType.USER)
+        self.assertEqual(params.registration_params.priority, 10)
+        self.assertEqual(encode(params), V2_USER_10)
 
     def test_v2_system_with_largest_priority(self):
         params = build(task_type=AutomationTaskType.SYSTEM, priority=MAX_U64)
@@ -129,6 +131,7 @@ class TestAutomationRegistrationParamsBcs(unittest.TestCase):
         for hex_bytes, task_type, priority in [
             (V1, None, None),
             (V2_USER_NONE, AutomationTaskType.USER, None),
+            (V2_USER_10, AutomationTaskType.USER, 10),
             (V2_SYSTEM_MAX, AutomationTaskType.SYSTEM, MAX_U64),
         ]:
             with self.subTest(hex_bytes=hex_bytes):
