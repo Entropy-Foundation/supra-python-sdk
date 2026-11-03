@@ -225,6 +225,10 @@ class AccountRestClient(RestClient):
     ) -> tuple[list[dict[str, Any]], str | None]:
         """Retrieves details of finalized coin deposit/withdraw type transactions associated with a given account.
 
+        It lists movements of the account's `CoinStore` only. It does not list SUPRA held in primary fungible stores,
+        which is how accounts hold SUPRA on Devnet, and on Testnet and Mainnet once the features that hold SUPRA in
+        primary stores (64 and 65) are enabled. Use `account_fa_transactions` for those.
+
         Args:
             account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.
             pagination (PaginationWithOrder | None): Pagination options. Default to None.
@@ -237,7 +241,9 @@ class AccountRestClient(RestClient):
         Returns:
             tuple[list[dict[str, Any]], str | None]: A tuple containing,
                 - list[dict[str, Any]]: Details of finalized coin deposit/withdraw type transactions associated with a
-                    given account.
+                    given account. On a chain created with features 64 and 65 on, such as Devnet, no account has a
+                    `CoinStore<SupraCoin>`, so the list holds none of an account's SUPRA movements;
+                    `account_history` with the category `fa` lists them too, on nodes from `supra_node_v12.0.0`.
                 - str | None: Cursor to retrieve the next page, or `None` when the feed has ended. Nodes up to
                     v11.7.x end this feed with the cursor `0` on an empty page; that is reported as `None` too. An
                     empty page carrying a cursor other than `0` and the request's own does not end the feed. The
@@ -283,6 +289,11 @@ class AccountRestClient(RestClient):
 
         The iteration ends when the node sends no next cursor or repeats one (see
         `supra_sdk.clients.rest.paging.next_cursor`). An empty page with a new cursor does not end it.
+
+        It does not list SUPRA held in primary fungible stores, which is how every account holds SUPRA on a chain
+        created with features 64 and 65 on, such as Devnet; see `account_coin_transactions`. Use
+        `account_fa_transactions`, or `iter_account_history` with the category `fa` on nodes from
+        `supra_node_v12.0.0`, for those.
 
         Args:
             account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.
