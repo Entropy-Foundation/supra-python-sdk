@@ -20,8 +20,8 @@ Check [examples](examples/README.md) section.
 ### SUPRA as a fungible asset
 
 SUPRA exists in two forms: a `CoinStore` balance and a balance in the account's primary fungible store (metadata
-address `0xa`). A Devnet created with SUPRA as a fungible asset from genesis funds accounts in the fungible store only;
-Testnet and Mainnet accounts hold a `CoinStore` balance until they migrate it.
+address `0xa`). A Devnet created with SUPRA as a fungible asset from genesis funds accounts in the fungible store only.
+Accounts that still hold a `CoinStore` balance keep it there until they migrate it.
 
 - `account_supra_balance` / `account_coin_balance` read `0x1::coin::balance`: the `CoinStore` balance plus the paired
   fungible asset balance, so the sum is the same in either form. The fungible asset part is included only while the
@@ -29,12 +29,15 @@ Testnet and Mainnet accounts hold a `CoinStore` balance until they migrate it.
 - `account_fa_balance` reads the fungible store alone (`0x1::primary_fungible_store::balance`), and is 0 for an account
   that has only a `CoinStore` balance.
 - `transfer_fungible_asset` debits the sender's fungible store only. `transfer_supra_coin` moves SUPRA held in either form.
-- `migrate_coin_to_fungible_store` moves a `CoinStore` balance into the fungible store. It is meaningful only where a
-  `CoinStore` exists, and cannot be undone.
-- `account_fa_transactions` lists the transactions of an account's primary fungible store, a page at a time. The
-  returned cursor is `None` at the end of the feed on a v12 node; a v11.7.0 node sends `"0"` instead. Stop when the
-  cursor is `None` or `"0"`, not on an empty page: a page filtered by `transaction_type` can be empty and still carry
-  a cursor to continue from.
+- `migrate_coin_to_fungible_store` moves a `CoinStore` balance into the fungible store. It is meaningful only for
+  accounts that still hold a `CoinStore` balance, and cannot be undone. The framework of v11.7.x nodes writes a
+  `coin::MigrationFlag` at the store; the v12 framework writes none, and a converted account is one without
+  `CoinStore<CoinType>`.
+- `account_fa_transactions` lists the transactions of an account's primary fungible store, a page at a time. On
+  Devnet an account's SUPRA movements are listed here and not by `account_coin_transactions`. The returned cursor is
+  `None` at the end of the feed on v11.7.x and v12 nodes (the method reads a v11.7.x node's `"0"` on an empty page as
+  the end). Stop when the cursor is `None`, not on an empty page or on `"0"`: a page filtered by `transaction_type`
+  can be empty and still carry a cursor to continue from, and `"0"` can be the position of a genesis row.
 
 ```python
 balance = await client.account_fa_balance(alice.address())

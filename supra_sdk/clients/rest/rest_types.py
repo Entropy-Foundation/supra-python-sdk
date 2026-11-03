@@ -331,7 +331,7 @@ class TransactionType(str, Enum):
         USER (str): Represents a user transaction type.
         META (str): Represents a metadata transaction type.
         RECORD (str): Represents automation registry records.
-        SETTLEMENT (str): Represents cross-VM settlement transactions. Accepted by v12 nodes only; a v11.7.0 node
+        SETTLEMENT (str): Represents cross-VM settlement transactions. Accepted by v12 nodes only; a v11.7.x node
             rejects it as an unknown `type`.
 
     """

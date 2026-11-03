@@ -327,7 +327,7 @@ class SupraClient(
         This reads `0x1::primary_fungible_store::balance`, the fungible store alone. SUPRA that the account still
         holds in a `CoinStore` is not part of it, and an account with no primary store has a balance of 0. SUPRA is
         held as a fungible asset from genesis on a Devnet that was created that way (faucet funds land in the primary
-        store), while a Testnet or Mainnet account holds a `CoinStore` balance until it migrates with
+        store), while an account that still holds a `CoinStore` balance keeps it there until it migrates with
         `migrate_coin_to_fungible_store`. `account_supra_balance` reads the sum of both forms.
 
         Args:
@@ -1084,12 +1084,11 @@ class SupraClient(
         This method builds a `0x1::primary_fungible_store::transfer` payload, signs it with the sender's account, and
         submits it to the network. The recipient's primary store is created when it does not exist.
 
-        Only the sender's fungible store is debited. SUPRA that the sender holds in a `CoinStore` (Testnet and Mainnet
-        until a migration) is not moved, and the transaction aborts when the fungible store holds less than `amount`;
-        without a `max_gas_amount` the abort is reported by the gas estimation as a `MaxGasEstimationError`, and with
-        one as a `TransactionFailedError`. Check `account_fa_balance` first, call `migrate_coin_to_fungible_store` to
-        move the coin balance into the fungible store, or use `transfer_supra_coin`, which moves SUPRA held in either
-        form.
+        Only the sender's fungible store is debited. SUPRA that the sender still holds in a `CoinStore` is not moved,
+        and the transaction aborts when the fungible store holds less than `amount`; without a `max_gas_amount` the
+        abort is reported by the gas estimation as a `MaxGasEstimationError`, and with one as a
+        `TransactionFailedError`. Check `account_fa_balance` first, call `migrate_coin_to_fungible_store` to move the
+        coin balance into the fungible store, or use `transfer_supra_coin`, which moves SUPRA held in either form.
 
         Gas is paid in SUPRA whatever the asset, and the gas estimation described at `transfer_supra_coin` applies.
 
@@ -1152,17 +1151,20 @@ class SupraClient(
         holds the coin as a fungible asset only. The sum that `account_supra_balance` reads does not change; the
         balance that `account_fa_balance` reads becomes that sum.
 
-        Migration is meaningful only where the account has a `CoinStore`: Testnet and Mainnet accounts that have not
-        migrated. On a Devnet whose SUPRA is held as a fungible asset from genesis there is no `CoinStore` to move,
-        and the transaction changes no balance but still costs gas. The transaction aborts when the framework's
-        coin-to-fungible-asset migration feature is not enabled. The migration cannot be undone.
+        Migration is meaningful only for accounts that still hold a `CoinStore` balance. On a Devnet whose SUPRA is
+        held as a fungible asset from genesis there is no `CoinStore` to move, and the transaction changes no balance
+        but still costs gas. The transaction aborts when the framework's coin-to-fungible-asset migration feature is
+        not enabled. The migration cannot be undone.
 
         For a `coin_type` other than SUPRA, the framework (`0x1::coin::migrate_to_fungible_store`) creates the
         paired fungible asset metadata object of the coin if none exists yet, and aborts when the coin type is not
         initialized. For any coin type, including SUPRA, it creates the account's primary store of the paired fungible
-        asset if it does not exist and writes a `MigrationFlag` at that store, even when the account has no
-        `CoinStore`; in that case no balance moves. For SUPRA the paired fungible asset must already exist, as the
-        framework does not create it here and aborts otherwise.
+        asset if it does not exist, even when the account has no `CoinStore`; in that case no balance moves. For SUPRA
+        the paired fungible asset must already exist, as the framework does not create it here and aborts otherwise.
+
+        The framework of v11.7.x nodes also writes a `MigrationFlag` at the primary store, with or without a
+        `CoinStore`. The v12 framework writes none: an account's conversion shows as the absence of
+        `CoinStore<CoinType>` at the account, not as a `MigrationFlag`.
 
         Args:
             sender (Account): The account whose balance is migrated.

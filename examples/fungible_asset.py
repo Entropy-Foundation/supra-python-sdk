@@ -51,9 +51,9 @@ async def main():
             bob.address(), pagination
         )
         print(f"Page of {len(transactions)} transactions, next cursor: {cursor}")
-        # A v12 node omits the cursor at the end of the feed; a v11.7.0 node sends "0". An empty page does not end
-        # a walk: a page filtered by `transaction_type` can be empty and still carry a cursor.
-        if cursor is None or cursor == "0":
+        # The helper returns None at the end of the feed on v11.7.x and v12 nodes. An empty page does not end a
+        # walk: a page filtered by `transaction_type` can be empty and still carry a cursor, and "0" is a cursor.
+        if cursor is None:
             break
 
     await supra_client.close()

@@ -359,10 +359,58 @@ class TestAccountFaTransactions(FungibleAssetHelperTests):
         (_, cursor), _ = await self.fetch(node, OWNER)
         self.assertIsNone(cursor)
 
-    async def test_zero_is_a_valid_cursor(self):
-        node = FakeNode(self.page("0"))
+    async def test_zero_on_a_page_with_rows_is_a_cursor(self):
+        node = FakeNode(self.page("0", [{"n": 1}]))
         (_, cursor), _ = await self.fetch(node, OWNER)
         self.assertEqual(cursor, "0")
+
+    async def test_zero_on_an_empty_page_is_the_end(self):
+        for pagination, transaction_type in [
+            (None, None),
+            (PaginationWithOrder(ascending=True), None),
+            (PaginationWithOrder(ascending=False), TransactionType.USER),
+            (None, TransactionType.USER),
+            (PaginationWithOrder(start="17", ascending=True), TransactionType.USER),
+        ]:
+            with self.subTest(pagination=pagination, transaction_type=transaction_type):
+                node = FakeNode(self.page("0"))
+                (_, cursor), _ = await self.fetch(
+                    node, OWNER, pagination, transaction_type=transaction_type
+                )
+                self.assertIsNone(cursor)
+
+    async def test_zero_on_the_first_ascending_typed_empty_page_is_a_cursor(self):
+        node = FakeNode(self.page("0"))
+        (_, cursor), _ = await self.fetch(
+            node,
+            OWNER,
+            PaginationWithOrder(ascending=True),
+            transaction_type=TransactionType.USER,
+        )
+        self.assertEqual(cursor, "0")
+
+    async def test_echo_of_the_sent_start_on_an_empty_page_is_the_end(self):
+        node = FakeNode(self.page("17"))
+        (_, cursor), _ = await self.fetch(node, OWNER, PaginationWithOrder(start="17"))
+        self.assertIsNone(cursor)
+        node = FakeNode(self.page("0"))
+        (_, cursor), _ = await self.fetch(
+            node,
+            OWNER,
+            PaginationWithOrder(start="0", ascending=True),
+            transaction_type=TransactionType.USER,
+        )
+        self.assertIsNone(cursor)
+
+    async def test_empty_page_with_a_new_cursor_continues(self):
+        node = FakeNode(self.page("20"))
+        (_, cursor), _ = await self.fetch(
+            node,
+            OWNER,
+            PaginationWithOrder(start="10"),
+            transaction_type=TransactionType.USER,
+        )
+        self.assertEqual(cursor, "20")
 
     async def test_empty_start_is_not_sent(self):
         node = FakeNode()
@@ -392,31 +440,59 @@ class TestAccountFaTransactions(FungibleAssetHelperTests):
         starts = [r.url.params.get("start") for r in node.of("/fa_transactions")]
         self.assertEqual(starts, [None, "2"])
 
-    async def test_walk_of_a_v11_7_0_filtered_feed_ends_at_cursor_zero(self):
-        # A v11.7.0 node sends the cursor of the last row read even when the filter removed every row, and "0" when
-        # it read none. A walk that stopped on an empty page would end after the first page.
-        responses = [
-            self.page("10", []),
-            self.page("20", [{"n": 1}]),
-            self.page("0", []),
-        ]
+    async def walk(
+        self,
+        responses: list[httpx.Response],
+        ascending: bool | None = None,
+        transaction_type: TransactionType | None = None,
+    ) -> tuple[list[dict], FakeNode]:
+        """Reads pages until the returned cursor is None, answering the requests with `responses` in order."""
         node = FakeNode()
         client = await self.make_client(node)
         collected: list[dict] = []
         cursor: str | None = None
         for response in responses:
             node.fa_transactions = response
-            pagination = PaginationWithOrder(start=cursor) if cursor else None
+            pagination = PaginationWithOrder(start=cursor, ascending=ascending)
             page, cursor = await client.account_fa_transactions(
-                OWNER, pagination, transaction_type=TransactionType.USER
+                OWNER, pagination, transaction_type=transaction_type
             )
             collected.extend(page)
-            if cursor is None or cursor == "0":
+            if cursor is None:
                 break
-        self.assertEqual(cursor, "0")
+        self.assertIsNone(cursor)
+        return collected, node
+
+    def starts(self, node: FakeNode) -> list[str | None]:
+        return [r.url.params.get("start") for r in node.of("/fa_transactions")]
+
+    async def test_walk_of_a_v11_7_x_filtered_feed_ends_at_zero_on_an_empty_page(self):
+        # A v11.7.x node sends the cursor of the last row read even when the filter removed every row, and "0" when
+        # it read none. A walk that stopped on an empty page would end after the first page.
+        collected, node = await self.walk(
+            [self.page("10", []), self.page("20", [{"n": 1}]), self.page("0", [])],
+            transaction_type=TransactionType.USER,
+        )
         self.assertEqual(collected, [{"n": 1}])
-        starts = [r.url.params.get("start") for r in node.of("/fa_transactions")]
-        self.assertEqual(starts, [None, "10", "20"])
+        self.assertEqual(self.starts(node), [None, "10", "20"])
+
+    async def test_ascending_typed_walk_continues_from_zero_once(self):
+        collected, node = await self.walk(
+            [self.page("0", []), self.page("0", [])],
+            ascending=True,
+            transaction_type=TransactionType.USER,
+        )
+        self.assertEqual(collected, [])
+        self.assertEqual(self.starts(node), [None, "0"])
+
+    async def test_ascending_typed_walk_reads_the_rows_after_a_genesis_row(self):
+        collected, node = await self.walk(
+            [self.page("0", []), self.page(None, [{"n": 1}])],
+            ascending=True,
+            transaction_type=TransactionType.USER,
+        )
+        self.assertEqual(collected, [{"n": 1}])
+        self.assertEqual(self.starts(node), [None, "0"])
 
     async def test_invalid_address_sends_nothing(self):
         node = FakeNode()
