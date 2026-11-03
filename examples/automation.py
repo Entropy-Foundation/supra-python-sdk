@@ -36,16 +36,19 @@ async def main():
             TransactionArgument(1, Serializer.u64),
         ],
     )
-    # Without a task type or a priority the task is registered with version 1 of the
-    # registration parameters. To use version 2, pass `automation_task_type` (USER or
-    # SYSTEM; SYSTEM needs an account the registry has authorised for system tasks)
-    # and/or `automation_priority`. Without a priority, the registry uses the task's
-    # index as its priority.
+    # Without a task type the task is registered with version 1 of the registration
+    # parameters. `automation_task_type` selects version 2. `automation_priority` is
+    # accepted only with `AutomationTaskType.SYSTEM`, from an account the registry has
+    # authorised for system tasks; a user task's priority is its task index.
     #
-    # The gas price cap must be at least the node's minimum gas price.
-    gas_price_cap = (await supra_client.estimate_gas_price())[
-        "min_configured_gas_price"
-    ]
+    # The node refuses a gas price cap below its minimum gas price. A task runs only in
+    # blocks whose gas price is at or below its cap and is skipped in blocks priced above
+    # it, so the cap here is the recent median price, within the node's bounds.
+    gas_prices = await supra_client.estimate_gas_price()
+    gas_price_cap = min(
+        max(gas_prices["min_configured_gas_price"], gas_prices["median_gas_price"]),
+        gas_prices["max_gas_price"],
+    )
     task_registration_tx_hash = await supra_client.register_automation_task(
         sender,
         automated_function,

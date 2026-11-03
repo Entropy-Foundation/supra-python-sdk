@@ -35,6 +35,8 @@ requires_node = unittest.skipUnless(
 SUPRA_COIN_STORE = "0x1::coin::CoinStore<0x1::supra_coin::SupraCoin>"
 FA_DEPOSIT_EVENT = "0x1::fungible_asset::Deposit"
 COIN_DEPOSIT_EVENT = "0x1::coin::DepositEvent"
+# Address of the SUPRA fungible asset metadata object.
+SUPRA_COIN_METADATA = "0xa"
 
 
 async def has_supra_coin_store(
@@ -42,9 +44,9 @@ async def has_supra_coin_store(
 ) -> bool:
     """Whether the account holds SUPRA in a `CoinStore`.
 
-    Nodes whose genesis predates the fungible-asset migration keep SUPRA in a
-    `CoinStore<SupraCoin>`; newer ones keep it in a primary fungible store, so the
-    resource is absent.
+    With the framework's coin-to-fungible-asset features 64 and 65 on at genesis, SUPRA
+    lives in primary fungible stores and the resource is absent; without them, accounts
+    keep `CoinStore<SupraCoin>`.
     """
     try:
         await supra_client.account_resource(address, SUPRA_COIN_STORE)
@@ -53,6 +55,27 @@ async def has_supra_coin_store(
             return False
         raise
     return True
+
+
+async def deposit_event_type(
+    supra_client: SupraClient, receiver: AccountAddress
+) -> str:
+    """The event type a SUPRA deposit into `receiver` emits, which follows the receiver's layout."""
+    if await has_supra_coin_store(supra_client, receiver):
+        return COIN_DEPOSIT_EVENT
+    return FA_DEPOSIT_EVENT
+
+
+async def events_of_type(
+    supra_client: SupraClient, tx_hash: str, event_type: str
+) -> list[dict[str, Any]]:
+    """The Move events of the given type that a transaction emitted, in order."""
+    tx_data = await supra_client.transaction_by_hash(tx_hash)
+    return [
+        event
+        for event in tx_data["output"]["Move"]["events"]
+        if event["type"] == event_type
+    ]
 
 
 @requires_node
@@ -243,23 +266,35 @@ class TestSupraClientEndpointsIntegration(unittest.IsolatedAsyncioTestCase):
             ),
             2 if uses_coin_store else 0,
         )
-        self.assertEqual(
-            len(
-                (
-                    await self.supra_client.account_coin_transactions(
-                        self.test_account.address(), PaginationWithOrder(count=1)
-                    )
-                )[0]
-            ),
-            1 if uses_coin_store else 0,
+        page, cursor = await self.supra_client.account_coin_transactions(
+            self.test_account.address(), PaginationWithOrder(count=1)
         )
-        if not uses_coin_store:
-            # The deposit event names the receiving store, not the account.
-            deposits = await self._events_of_type(tx_hash, FA_DEPOSIT_EVENT)
-            self.assertEqual(
-                [event["data"]["amount"] for event in deposits],
-                ["100"],
+        if uses_coin_store:
+            self.assertEqual(len(page), 1)
+        else:
+            # An empty listing carries no cursor.
+            self.assertEqual((page, cursor), ([], ""))
+
+        # The deposit event type follows the receiver's layout, not the sender's.
+        receiver = AccountAddress.from_str("0x1")
+        deposit_type = await deposit_event_type(self.supra_client, receiver)
+        deposits = await events_of_type(self.supra_client, tx_hash, deposit_type)
+        if deposit_type == FA_DEPOSIT_EVENT:
+            # The event names the receiver's primary store, not the receiver.
+            (receiver_store,) = await self.supra_client.view(
+                "0x1::primary_fungible_store::primary_store_address",
+                ["0x1::fungible_asset::Metadata"],
+                [str(receiver), SUPRA_COIN_METADATA],
             )
+            matching = [
+                event
+                for event in deposits
+                if AccountAddress.from_str(event["data"]["store"])
+                == AccountAddress.from_str(receiver_store)
+            ]
+            self.assertEqual([event["data"]["amount"] for event in matching], ["100"])
+        else:
+            self.assertEqual([event["data"]["amount"] for event in deposits], ["100"])
 
     async def test_transaction_by_hash(self):
         await self.supra_client.faucet(self.test_account.address())
@@ -330,14 +365,9 @@ class TestSupraClientEndpointsIntegration(unittest.IsolatedAsyncioTestCase):
         tx_hash = await self.supra_client.transfer_supra_coin(
             self.test_account, AccountAddress.from_str("0x1"), 1
         )
-        # With a SUPRA `CoinStore` the transfer emits `0x1::coin::DepositEvent`;
-        # without one it emits `0x1::fungible_asset::Deposit`.
-        deposit_event_type = (
-            COIN_DEPOSIT_EVENT
-            if await has_supra_coin_store(
-                self.supra_client, self.test_account.address()
-            )
-            else FA_DEPOSIT_EVENT
+        # The deposit event type follows the receiver's layout.
+        event_type = await deposit_event_type(
+            self.supra_client, AccountAddress.from_str("0x1")
         )
         block_height = (await self.supra_client.transaction_by_hash(tx_hash))[
             "block_header"
@@ -346,7 +376,7 @@ class TestSupraClientEndpointsIntegration(unittest.IsolatedAsyncioTestCase):
             len(
                 (
                     await self.supra_client.events_by_type(
-                        deposit_event_type,
+                        event_type,
                         EventsPagination(
                             start_height=block_height,
                             end_height=block_height + 1,
@@ -390,16 +420,6 @@ class TestSupraClientEndpointsIntegration(unittest.IsolatedAsyncioTestCase):
             "block_header"
         ]["hash"]
         self.assertTrue(tx_hash in (await self.supra_client.txs_by_block(block_hash)))
-
-    async def _events_of_type(
-        self, tx_hash: str, event_type: str
-    ) -> list[dict[str, Any]]:
-        tx_data = await self.supra_client.transaction_by_hash(tx_hash)
-        return [
-            event
-            for event in tx_data["output"]["Move"]["events"]
-            if event["type"] == event_type
-        ]
 
     async def create_test_signed_transaction_payload(self) -> SignedTransaction:
         transaction_arguments = [
@@ -490,6 +510,8 @@ class TestSupraAutomationTransactions(unittest.IsolatedAsyncioTestCase):
                 TransactionArgument(1, Serializer.u64),
             ],
         )
+        # The node refuses a cap below its minimum gas price. These tests do not wait for
+        # the task to execute, so the minimum is enough.
         tx_hash = await self.supra_client.register_automation_task(
             self.sender,
             automated_function,
@@ -504,11 +526,8 @@ class TestSupraAutomationTransactions(unittest.IsolatedAsyncioTestCase):
     async def _get_event_data_from_tx(
         self, tx_hash: str, event_type: str
     ) -> dict[str, Any] | None:
-        tx_data = await self.supra_client.transaction_by_hash(tx_hash)
-        for event in tx_data["output"]["Move"]["events"]:
-            if event["type"] == event_type:
-                return event
-        return None
+        events = await events_of_type(self.supra_client, tx_hash, event_type)
+        return events[0] if events else None
 
     async def asyncTearDown(self):
         await self.supra_client.close()
