@@ -184,6 +184,22 @@ class TestSequenceNumber(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(signed.transaction.sequence_number, 0)
         self.assertEqual([r for r in node.requests if "/accounts/" in r[1]], [])
+        simulated = decode_simulated(node.simulated[0])
+        self.assertEqual(simulated.transaction.sequence_number, 0)
+
+    async def test_sequence_number_is_keyword_only(self):
+        node = FakeNode()
+        client = make_client(node)
+        self.addAsyncCleanup(client.close)
+        with self.assertRaises(TypeError):
+            await client.create_fee_payer_transaction(
+                Account.generate(),
+                Account.generate(),
+                [],
+                transfer_payload(),
+                None,
+                0,  # type: ignore[misc]
+            )
 
     async def test_multi_agent_transaction_without_it_asks_the_node(self):
         node = FakeNode()
