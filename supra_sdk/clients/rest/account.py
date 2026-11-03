@@ -22,6 +22,7 @@ from supra_sdk.clients.rest.rest_types import (
     AutomatedTransactionsPagination,
     Pagination,
     PaginationWithOrder,
+    TransactionType,
     format_endpoint,
 )
 
@@ -220,12 +221,18 @@ class AccountRestClient(RestClient):
         self,
         account_address: AccountAddress | str,
         pagination: PaginationWithOrder | None = None,
+        transaction_type: TransactionType | str | None = None,
     ) -> tuple[list[dict[str, Any]], str | None]:
         """Retrieves details of finalized coin deposit/withdraw type transactions associated with a given account.
 
         Args:
             account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.
             pagination (PaginationWithOrder | None): Pagination options. Default to None.
+            transaction_type (TransactionType | str | None): Keeps only transactions of this type (`auto`, `user`,
+                `meta`, `record` or, on v12 nodes only, `settlement`), as a `TransactionType` or its string value.
+                It is sent as the node's `type` query parameter; a v11.7.x node rejects `settlement` with HTTP 400.
+                The node applies it after reading a page, so a filtered page can be empty and still carry a cursor.
+                Default to None, which keeps every type.
 
         Returns:
             tuple[list[dict[str, Any]], str | None]: A tuple containing,
@@ -233,22 +240,43 @@ class AccountRestClient(RestClient):
                     given account.
                 - str | None: Cursor to retrieve the next page, or `None` when the feed has ended. Nodes up to
                     v11.7.x end this feed with the cursor `0` on an empty page; that is reported as `None` too. An
-                    empty page carrying a cursor other than `0` and the request's own does not end the feed.
+                    empty page carrying a cursor other than `0` and the request's own does not end the feed. The
+                    exception is the first request (no `start`) of an ascending read with a `transaction_type`:
+                    block 0 has timestamp 0, so `0` can be the position of a genesis row that the filter excluded,
+                    and `0` is returned. If the feed has no further rows the node answers the request with
+                    `start=0` with `0` again, which ends the feed.
 
         """
         endpoint = format_endpoint(
             ACCOUNT_COIN_TRANSACTIONS_ENDPOINT, account_address=account_address
         )
         params = pagination.to_params() if pagination else {}
+        if transaction_type is not None:
+            params["type"] = str(
+                transaction_type.value
+                if isinstance(transaction_type, TransactionType)
+                else transaction_type
+            )
         response = await self.api_client.get(endpoint=endpoint, params=params)
         page = response.json()
-        # The request carries no `type` filter, so `"0"` on an empty page is the end of the feed on both node lines.
-        return page, next_cursor(response, page, sent=params.get("start"))
+        # Without a `type` filter `"0"` on an empty page is the end of the feed on both node lines. With one, the
+        # first ascending page can be empty with `"0"` because the filter excluded a genesis row, so it continues.
+        sent = params.get("start")
+        zero_continues = (
+            sent is None
+            and pagination is not None
+            and pagination.ascending is True
+            and transaction_type is not None
+        )
+        return page, next_cursor(
+            response, page, sent=sent, zero_continues=zero_continues
+        )
 
     def iter_account_coin_transactions(
         self,
         account_address: AccountAddress | str,
         pagination: PaginationWithOrder | None = None,
+        transaction_type: TransactionType | str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Iterates over all coin deposit/withdraw type transactions of a given account, requesting further pages
         until the feed ends.
@@ -260,13 +288,17 @@ class AccountRestClient(RestClient):
             account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.
             pagination (PaginationWithOrder | None): Pagination options of the first request; `count` sets the page
                 size, `start` the cursor to begin from and `ascending` the order. Default to None.
+            transaction_type (TransactionType | str | None): Keeps only transactions of this type, as for
+                `account_coin_transactions`; `settlement` needs a v12 node. Default to None, which keeps every type.
 
         Returns:
             AsyncIterator[dict[str, Any]]: The transactions, in the requested order.
 
         """
         return paginate(
-            lambda p: self.account_coin_transactions(account_address, p),
+            lambda p: self.account_coin_transactions(
+                account_address, p, transaction_type
+            ),
             pagination or PaginationWithOrder(),
             lambda p, cursor: replace(p, start=cursor),
         )

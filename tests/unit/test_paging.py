@@ -3,7 +3,6 @@
 
 import unittest
 from collections.abc import Callable
-from dataclasses import replace
 from typing import Any
 
 import httpx
@@ -11,13 +10,14 @@ import httpx
 from supra_sdk.account_address import AccountAddress
 from supra_sdk.clients import ApiClient
 from supra_sdk.clients.api_client import ApiError
-from supra_sdk.clients.rest.paging import next_cursor, paginate
+from supra_sdk.clients.rest.paging import next_cursor
 from supra_sdk.clients.rest.rest_types import (
     AccountHistoryCategory,
     AutomatedTransactionsPagination,
     EventsPagination,
     Pagination,
     PaginationWithOrder,
+    TransactionType,
 )
 from supra_sdk.clients.rest.supra_client import SupraClient
 from supra_sdk.clients.supra_token_object import SupraTokenObjectClient
@@ -476,46 +476,83 @@ class IteratorTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TypedAscendingFeedTests(unittest.IsolatedAsyncioTestCase):
-    """`paginate` over a feed read in ascending order with a `type` filter, where `"0"` on the first empty page can
-    be a genesis row's position. No feed on this client takes a `type` filter yet; the fetch is built the way such a
-    feed would use `next_cursor`."""
+    """Coin transactions read in ascending order with a `type` filter, where `"0"` on the first empty page can be a
+    genesis row's position."""
 
-    def feed(self, responses: dict[str | None, httpx.Response]):
-        self.sent: list[str | None] = []
+    async def asyncTearDown(self):
+        await self.node.close()
 
-        async def fetch(p: PaginationWithOrder) -> tuple[list[Any], str | None]:
-            self.sent.append(p.start)
-            response = responses[p.start]
-            items = response.json()
-            zero_continues = p.start is None and p.ascending is True
-            return items, next_cursor(
-                response, items, sent=p.start, zero_continues=zero_continues
-            )
-
-        return paginate(
-            fetch,
-            PaginationWithOrder(ascending=True),
-            lambda p, cursor: replace(p, start=cursor),
+    async def feed(
+        self,
+        responses: dict[str | None, httpx.Response],
+        transaction_type: TransactionType | str | None = TransactionType.USER,
+        ascending: bool | None = True,
+    ) -> list[Any]:
+        self.node = await FakeNode.create(
+            lambda request: responses[request.url.params.get("start")]
         )
+        return await collect(
+            self.node.client.iter_account_coin_transactions(
+                ADDRESS, PaginationWithOrder(ascending=ascending), transaction_type
+            )
+        )
+
+    def sent(self) -> list[str | None]:
+        return [request.url.params.get("start") for request in self.node.requests]
+
+    async def test_the_filter_is_sent_as_the_type_parameter(self):
+        await self.feed({None: page([], None)}, "settlement")
+        self.assertEqual(
+            self.node.params(0), {"ascending": "true", "type": "settlement"}
+        )
+        await self.node.close()
+        await self.feed({None: page([], None)}, TransactionType.RECORD, None)
+        self.assertEqual(self.node.params(0), {"type": "record"})
 
     async def test_zero_continues_once_and_its_echo_ends_the_feed(self):
-        items = await collect(self.feed({None: page([], "0"), "0": page([], "0")}))
+        items = await self.feed({None: page([], "0"), "0": page([], "0")})
         self.assertEqual(items, [])
-        self.assertEqual(self.sent, [None, "0"])
+        self.assertEqual(self.sent(), [None, "0"])
+        self.assertEqual(
+            self.node.params(1), {"start": "0", "ascending": "true", "type": "user"}
+        )
 
     async def test_zero_continues_to_the_rows_after_a_genesis_row(self):
-        items = await collect(
-            self.feed(
-                {None: page([], "0"), "0": page([1, 2], "7"), "7": page([], None)}
-            )
+        items = await self.feed(
+            {None: page([], "0"), "0": page([1, 2], "7"), "7": page([], None)}
         )
         self.assertEqual(items, [1, 2])
-        self.assertEqual(self.sent, [None, "0", "7"])
+        self.assertEqual(self.sent(), [None, "0", "7"])
 
     async def test_zero_on_a_later_empty_page_ends_the_feed(self):
-        items = await collect(self.feed({None: page([1], "7"), "7": page([], "0")}))
+        items = await self.feed({None: page([1], "7"), "7": page([], "0")})
         self.assertEqual(items, [1])
-        self.assertEqual(self.sent, [None, "7"])
+        self.assertEqual(self.sent(), [None, "7"])
+
+    async def test_zero_ends_the_feed_without_a_filter(self):
+        items = await self.feed({None: page([], "0")}, None)
+        self.assertEqual(items, [])
+        self.assertEqual(self.sent(), [None])
+
+    async def test_zero_ends_a_descending_filtered_feed(self):
+        items = await self.feed({None: page([], "0")}, "user", False)
+        self.assertEqual(items, [])
+        self.assertEqual(self.sent(), [None])
+
+    async def test_zero_continues_only_for_the_first_request(self):
+        self.node = await FakeNode.create(lambda _: page([], "0"))
+        self.assertEqual(
+            await self.node.client.account_coin_transactions(
+                ADDRESS, PaginationWithOrder(start="5", ascending=True), "user"
+            ),
+            ([], None),
+        )
+        self.assertEqual(
+            await self.node.client.account_coin_transactions(
+                ADDRESS, PaginationWithOrder(ascending=True), "user"
+            ),
+            ([], "0"),
+        )
 
 
 class AccountHistoryTests(unittest.IsolatedAsyncioTestCase):
