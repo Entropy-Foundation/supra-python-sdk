@@ -521,6 +521,13 @@ class AutomationTaskType(enum.Enum):
     SYSTEM = 1
 
 
+_USER_TASK_PRIORITY_MESSAGE = (
+    "a user automation task cannot carry a priority (the registry uses its task "
+    "index); omit the priority, or use AutomationTaskType.SYSTEM from an account the "
+    "registry has authorised for system tasks"
+)
+
+
 class AutomationRegistrationParams:
     V1: int = 0
     V2: int = 1
@@ -550,13 +557,21 @@ class AutomationRegistrationParams:
     ) -> AutomationRegistrationParams:
         """Builds registration parameters, choosing the version from the arguments.
 
-        With neither ``task_type`` nor ``priority`` the result is version 1. With
-        either, it is version 2; a missing ``task_type`` is then
-        ``AutomationTaskType.USER``.
+        Without ``task_type`` the result is version 1; with one it is version 2.
 
-        Without a priority, the registry uses the task's index as its priority.
+        A priority applies to system tasks only; the registry refuses a user task that
+        carries one. A user task has no priority: the registry uses the task's index
+        as its priority. A system task can only be registered by an account the
+        registry has authorised.
+
+        Raises:
+            ValueError: If ``priority`` is given and ``task_type`` is not
+                ``AutomationTaskType.SYSTEM`` (including when it is ``None``), or if
+                ``priority`` is outside the range of a ``u64``.
         """
-        if task_type is None and priority is None:
+        if priority is not None and task_type is not AutomationTaskType.SYSTEM:
+            raise ValueError(_USER_TASK_PRIORITY_MESSAGE)
+        if task_type is None:
             return AutomationRegistrationParams(
                 AutomationRegistrationParamsV1(
                     automated_function,
@@ -575,7 +590,7 @@ class AutomationRegistrationParams:
                 automation_fee_cap_for_epoch,
                 expiration_timestamp_secs,
                 aux_data,
-                AutomationTaskType.USER if task_type is None else task_type,
+                task_type,
                 priority,
             )
         )
@@ -646,8 +661,17 @@ class AutomationRegistrationParamsV2:
     """Version 2 of the automation registration parameters.
 
     The version 1 fields, followed by the task type and an optional priority.
-    Without a priority (``None``), the registry uses the task's index as its
-    priority.
+    A priority applies to system tasks only; a user task has none, and the
+    registry uses the task's index as its priority. A system task without a
+    priority is treated the same way. A system task can only be registered by an
+    account the registry has authorised.
+
+    ``deserialize`` accepts a user task with a priority, so the payload of a
+    refused registration can be read from the chain's history.
+
+    Raises:
+        ValueError: If ``priority`` is given with ``AutomationTaskType.USER``, or
+            is outside the range of a ``u64``.
     """
 
     def __init__(
@@ -661,10 +685,40 @@ class AutomationRegistrationParamsV2:
         task_type: AutomationTaskType = AutomationTaskType.USER,
         priority: int | None = None,
     ):
+        self._check_task_type_and_priority(task_type, priority)
+        if priority is not None and task_type is AutomationTaskType.USER:
+            raise ValueError(_USER_TASK_PRIORITY_MESSAGE)
+        self._assign(
+            automated_function,
+            max_gas_amount,
+            gas_price_cap,
+            automation_fee_cap_for_epoch,
+            expiration_timestamp_secs,
+            aux_data,
+            task_type,
+            priority,
+        )
+
+    @staticmethod
+    def _check_task_type_and_priority(
+        task_type: AutomationTaskType, priority: int | None
+    ) -> None:
         if not isinstance(task_type, AutomationTaskType):
             raise TypeError("task_type must be an AutomationTaskType")
         if priority is not None and not 0 <= priority <= MAX_U64:
             raise ValueError("priority must be from 0 to 2^64 - 1")
+
+    def _assign(
+        self,
+        automated_function: EntryFunction,
+        max_gas_amount: int,
+        gas_price_cap: int,
+        automation_fee_cap_for_epoch: int,
+        expiration_timestamp_secs: int,
+        aux_data: list[bytes],
+        task_type: AutomationTaskType,
+        priority: int | None,
+    ) -> None:
         self.automated_function = automated_function
         self.max_gas_amount = max_gas_amount
         self.gas_price_cap = gas_price_cap
@@ -673,6 +727,37 @@ class AutomationRegistrationParamsV2:
         self.aux_data = aux_data
         self.task_type = task_type
         self.priority = priority
+
+    @classmethod
+    def _from_decoded(
+        cls,
+        automated_function: EntryFunction,
+        max_gas_amount: int,
+        gas_price_cap: int,
+        automation_fee_cap_for_epoch: int,
+        expiration_timestamp_secs: int,
+        aux_data: list[bytes],
+        task_type: AutomationTaskType,
+        priority: int | None,
+    ) -> AutomationRegistrationParamsV2:
+        """Builds the parameters of a decoded payload.
+
+        A registration the registry refused is still a committed transaction, so a
+        user task with a priority is accepted here although the constructor refuses it.
+        """
+        cls._check_task_type_and_priority(task_type, priority)
+        params = cls.__new__(cls)
+        params._assign(
+            automated_function,
+            max_gas_amount,
+            gas_price_cap,
+            automation_fee_cap_for_epoch,
+            expiration_timestamp_secs,
+            aux_data,
+            task_type,
+            priority,
+        )
+        return params
 
     @staticmethod
     def deserialize(deserializer: Deserializer) -> AutomationRegistrationParamsV2:
@@ -690,7 +775,7 @@ class AutomationRegistrationParamsV2:
                 f"Invalid automation task type: {task_type_index}"
             ) from None
         priority = deserializer.u64() if deserializer.bool() else None
-        return AutomationRegistrationParamsV2(
+        return AutomationRegistrationParamsV2._from_decoded(
             automated_function,
             max_gas_amount,
             gas_price_cap,
