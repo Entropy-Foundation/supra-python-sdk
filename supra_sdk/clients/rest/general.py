@@ -12,6 +12,7 @@ from supra_sdk.clients.rest.rest_types import (
     CHAIN_ID_ENDPOINT,
     EVENTS_BY_TYPE_ENDPOINT,
     TABLE_ITEMS_ENDPOINT,
+    VERSION_ENDPOINT,
     VIEW_FUNCTION_ENDPOINT,
     EventsPagination,
     format_endpoint,
@@ -143,3 +144,24 @@ class GeneralRestClient(RestClient):
             pagination or EventsPagination(),
             lambda p, cursor: replace(p, start=cursor),
         )
+
+    async def version(self) -> dict[str, Any]:
+        """Reads the node's version information from `GET /rpc/v3/version`.
+
+        Returns:
+            dict[str, Any]: The node's response, with these fields:
+                - version (str): Version of the node's Rust packages, e.g. '0.5.0'. It is the same for every
+                  release; use `release` to identify the release.
+                - release (str): Release tag the node binary was built from, e.g. 'supra_node_v12.0.0', or
+                  'supra_node_v12.0.0.rc7' for a release candidate. 'unreleased' for a binary built from a commit
+                  that is not a release. The key is absent from the response of a node before
+                  `supra_node_v12.0.0.rc7`: every v11 release and `supra_node_v12.0.0.rc1` to `rc6`.
+                - branch (str): Git branch used for the build. Empty when the build was made from a tag or the
+                  branch was not recorded.
+                - commit_hash (str): Full git commit hash the binary was built from. Empty when the build did not
+                  record it.
+                - build_time (str): Build timestamp.
+                - build_env (str): Rust toolchain used to build the binary.
+
+        """
+        return (await self.api_client.get(endpoint=VERSION_ENDPOINT)).json()
