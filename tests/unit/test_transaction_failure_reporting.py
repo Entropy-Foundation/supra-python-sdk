@@ -180,6 +180,7 @@ class TestTransactionFailureReporting(unittest.IsolatedAsyncioTestCase):
             httpx.Response(404, text="<html>Not Found</html>"),
             httpx.Response(404, json={"message": "something else"}),
             httpx.Response(404, json=["Information not available for"]),
+            httpx.Response(404, text="[" * 100_000),
         ]
         for response in others:
             with self.subTest(body=response.text):

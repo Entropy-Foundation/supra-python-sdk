@@ -346,6 +346,7 @@ class RetryTests(ClientTestCase):
             {"attempts": True},
             {"max_delay_seconds": -1},
             {"base_delay_seconds": float("inf")},
+            {"max_delay_seconds": 10**400},
         ):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 RetryPolicy(**kwargs)  # type: ignore[arg-type]

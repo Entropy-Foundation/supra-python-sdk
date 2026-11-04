@@ -496,17 +496,23 @@ class UnexpectedResponseError(ApiError, KeyError):
 
     field: str
 
-    def __init__(self, field: str, response: httpx.Response):
-        """Initialize the exception from the response that lacks `field`.
+    def __init__(
+        self, field: str, response: httpx.Response, problem: str | None = None
+    ):
+        """Initialize the exception from the response that lacks a usable `field`.
 
         Args:
             field (str): The field the SDK expected in the response body.
             response (httpx.Response): The response.
+            problem (str | None): What is wrong with the response, completing the sentence "The response of <URL>
+                ...". Defaults to "has no '<field>' field".
 
         """
         self.field = field
+        if problem is None:
+            problem = f"has no {field!r} field"
         super().__init__(
-            f"The response of {_request_url(response)} has no {field!r} field",
+            f"The response of {_request_url(response)} {problem}",
             response.status_code,
             response.headers,
             response.text,
@@ -611,8 +617,9 @@ def retry_after_seconds(data: Any, headers: Mapping[str, str]) -> float | None:
     """The number of seconds an error response asks the caller to wait before repeating the request.
 
     Args:
-        data (Any): The parsed JSON body, or None. Its `retry_after_seconds` field, a non-negative number or a
-            decimal string, is used when present.
+        data (Any): The parsed JSON body, or None. Its `retry_after_seconds` field is used when present and is a
+            finite, non-negative int or float (not a bool), or a string that `float()` accepts for such a value,
+            for example `"1.5"`, `"1e3"` or `"1_000"`.
         headers (Mapping[str, str]): The response headers. Their `Retry-After` value, delta-seconds or an HTTP date,
             is used when the body has no `retry_after_seconds`.
 

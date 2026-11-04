@@ -31,8 +31,10 @@ statuses raise a subclass of `ApiError`:
 | 429 | `ApiRateLimitError` | `retry_after_seconds`, from the body or the `Retry-After` header |
 | 503 | `ApiServiceUnavailableError` | |
 
-`view()` and `faucet()` raise `UnexpectedResponseError`, which is also a `KeyError`, when a 200 response does not
-have the field they read (`result` and `Accepted`). A request that exceeds the timeout raises `ClientTimeoutError`,
+`view()` raises `UnexpectedResponseError`, which is also a `KeyError`, when a 200 response is not a JSON object with
+the `result` field. `faucet()` returns `None` (or raises `FaucetRequestNotAcceptedError` while waiting) when the
+200 response is `"TryLater"`, and raises `UnexpectedResponseError` when the 200 body is not JSON or its `Accepted`
+field is missing, empty or not a string. A request that exceeds the timeout raises `ClientTimeoutError`,
 which is a `httpx.TimeoutException` and carries the request as `request`.
 
 Each phase of a request (connecting, waiting for a pooled connection, writing, reading) is limited to 60 seconds;

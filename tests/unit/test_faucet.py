@@ -84,6 +84,30 @@ class FaucetTests(unittest.IsolatedAsyncioTestCase):
                         await client.faucet(ADDRESS, wait_for_faucet=wait_for_faucet)
                     self.assertEqual(ctx.exception.field, "Accepted")
 
+    async def test_unexpected_body_message_names_the_problem(self):
+        cases = [
+            (httpx.Response(200, json={}), "has no 'Accepted' field"),
+            (
+                httpx.Response(200, json={"Accepted": ""}),
+                "'Accepted' field that is not a non-empty string",
+            ),
+            (
+                httpx.Response(200, json={"Accepted": 5}),
+                "'Accepted' field that is not a non-empty string",
+            ),
+            (
+                httpx.Response(200, text="<html>gateway</html>"),
+                "does not have a JSON body",
+            ),
+        ]
+        client = await self.make_client(cases[0][0])
+        for response, expected in cases:
+            with self.subTest(body=response.text[:40]):
+                self.queue = [response]
+                with self.assertRaises(UnexpectedResponseError) as ctx:
+                    await client.faucet(ADDRESS, wait_for_faucet=False)
+                self.assertIn(expected, str(ctx.exception))
+
     async def test_rate_limit_is_typed(self):
         # The node's body for an address inside the cooldown; the gateway may add `retry_after_seconds`.
         client = await self.make_client(

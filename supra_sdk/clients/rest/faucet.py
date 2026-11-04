@@ -53,9 +53,15 @@ class FaucetRestClient(RestClient):
         res_data = self._response_json(response, "Accepted")
         if res_data == _FAUCET_TRY_LATER:
             return None
-        accepted = res_data.get("Accepted") if isinstance(res_data, dict) else None
-        if not isinstance(accepted, str) or not accepted:
+        if not isinstance(res_data, dict) or "Accepted" not in res_data:
             raise UnexpectedResponseError("Accepted", response)
+        accepted = res_data["Accepted"]
+        if not isinstance(accepted, str) or not accepted:
+            raise UnexpectedResponseError(
+                "Accepted",
+                response,
+                "has an 'Accepted' field that is not a non-empty string",
+            )
         return accepted
 
     async def faucet_transaction_by_hash(self, tx_hash: str) -> dict[str, Any]:

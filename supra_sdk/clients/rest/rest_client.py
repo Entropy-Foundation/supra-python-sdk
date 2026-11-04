@@ -42,7 +42,11 @@ class RestClient:
         try:
             return response.json()
         except (ValueError, RecursionError):
-            raise UnexpectedResponseError(field, response) from None
+            raise UnexpectedResponseError(
+                field,
+                response,
+                f"does not have a JSON body, so it has no {field!r} field",
+            ) from None
 
     @staticmethod
     def _response_field(response: httpx.Response, field: str) -> Any:

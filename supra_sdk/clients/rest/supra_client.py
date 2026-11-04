@@ -1369,7 +1369,7 @@ def _is_transaction_not_found(error: ApiError) -> bool:
         return False
     try:
         message = json.loads(error.body).get("message")
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, RecursionError):
         return False
     return isinstance(message, str) and any(
         fragment in message for fragment in _TRANSACTION_NOT_FOUND_MESSAGES
