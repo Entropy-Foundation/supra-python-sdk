@@ -6,6 +6,11 @@ from dataclasses import replace
 from typing import Any
 
 from supra_sdk.account_address import AccountAddress
+from supra_sdk.clients.api_client import (
+    HISTORY_INDEXED_FROM_HEADER,
+    OLDEST_BLOCK_HEADER,
+    parse_height_header,
+)
 from supra_sdk.clients.rest.paging import next_cursor, paginate
 from supra_sdk.clients.rest.rest_client import RestClient
 from supra_sdk.clients.rest.rest_types import (
@@ -20,6 +25,7 @@ from supra_sdk.clients.rest.rest_types import (
     ACCOUNT_RESOURCES_ENDPOINT,
     ACCOUNT_TRANSACTIONS_ENDPOINT,
     AccountHistoryCategory,
+    AccountHistoryPage,
     AutomatedTransactionsPagination,
     Pagination,
     PaginationWithOrder,
@@ -527,7 +533,7 @@ class AccountRestClient(RestClient):
         account_address: AccountAddress | str,
         pagination: PaginationWithOrder | None = None,
         categories: Iterable[AccountHistoryCategory | str] | None = None,
-    ) -> tuple[list[dict[str, Any]], str | None]:
+    ) -> AccountHistoryPage:
         """Retrieves the history of an account: every finalized transaction that concerns the account, once each,
         with the categories it matched for the account (`GET /rpc/v3/accounts/{address}/history`).
 
@@ -539,10 +545,13 @@ class AccountRestClient(RestClient):
         `ApiError`) with `status_code` 404 and the message `Not Found`, the HTTP reason phrase.
 
         Automated transactions and automation registry records are not listed; use
-        `account_automated_transactions` for those. While the node sends the `x-supra-history-indexed-from` response
-        header, the history does not cover the blocks below the height it names: the node is indexing, or has not
-        indexed, the blocks it held before it kept the history. This method does not return that header, so a caller
-        cannot tell from its result whether the history covers the older blocks.
+        `account_automated_transactions` for those.
+
+        Coverage: `indexed_from` is the lowest block height the history covers. The node sends it while blocks below
+        that height remain unindexed, whether or not its `account_history_backfill` setting has it indexing them;
+        the transactions of those blocks are not listed. It is `None` when the history covers every block the node
+        holds. `oldest_block` is the height of the oldest block the node holds, and is `None` until the node's
+        archive has indexed at least one block.
 
         Paging: the node applies `categories` while it scans the account's history and reads at most 8 rows for
         each entry requested, so a page can hold fewer entries than `count`, or none, before the history is
@@ -563,12 +572,18 @@ class AccountRestClient(RestClient):
                 category is accepted too. Default to None, which the node reads as all four.
 
         Returns:
-            tuple[list[dict[str, Any]], str | None]: A tuple containing,
-                - list[dict[str, Any]]: The entries, each `{"categories": [...], "transaction": {...}}`, where
-                    `categories` lists the categories the transaction matched for the account, in the order `sent`,
-                    `coin`, `fa`, `da`, and `transaction` is a `TransactionV3`, tagged by `txn_type`, as
+            AccountHistoryPage: A page containing,
+                - entries (list[dict[str, Any]]): The entries, each `{"categories": [...], "transaction": {...}}`,
+                    where `categories` lists the categories the transaction matched for the account, in the order
+                    `sent`, `coin`, `fa`, `da`, and `transaction` is a `TransactionV3`, tagged by `txn_type`, as
                     `account_coin_transactions` returns it.
-                - str | None: Cursor to retrieve the next page, or `None` when the history has ended.
+                - cursor (str | None): Cursor to retrieve the next page, or `None` when the history has ended.
+                - indexed_from (int | None): The lowest block height the history covers, from the
+                    `x-supra-history-indexed-from` header, or `None` when the node sends none or the value is not a
+                    decimal integer.
+                - oldest_block (int | None): Height of the oldest block the node holds, from the
+                    `x-supra-oldest-block` header, or `None` when the node sends none or the value is not a decimal
+                    integer.
 
         Raises:
             ValueError: If `categories` is empty or names something other than `sent`, `coin`, `fa` or `da`.
@@ -583,7 +598,14 @@ class AccountRestClient(RestClient):
         response = await self.api_client.get(endpoint=endpoint, params=params)
         page = response.json()
         # The route exists only on v12 nodes, which end a feed by omitting the header; `"0"` is a cursor here.
-        return page, next_cursor(response, page, only_missing_header_ends=True)
+        return AccountHistoryPage(
+            entries=page,
+            cursor=next_cursor(response, page, only_missing_header_ends=True),
+            indexed_from=parse_height_header(
+                response.headers, HISTORY_INDEXED_FROM_HEADER
+            ),
+            oldest_block=parse_height_header(response.headers, OLDEST_BLOCK_HEADER),
+        )
 
     def iter_account_history(
         self,
@@ -595,7 +617,8 @@ class AccountRestClient(RestClient):
 
         The iteration ends when a response has no `x-supra-cursor` header, or when the node repeats a cursor. An
         empty page with a cursor and the cursor `"0"` do not end it. See `account_history` for the node release it
-        needs and what the history covers.
+        needs and what the history covers. The iterator does not report the coverage headers; `account_history`
+        returns them with each page.
 
         Args:
             account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.
@@ -611,8 +634,13 @@ class AccountRestClient(RestClient):
         """
         if categories is not None and not isinstance(categories, str):
             categories = tuple(categories)
+
+        async def fetch(p: PaginationWithOrder) -> tuple[list[Any], str | None]:
+            page = await self.account_history(account_address, p, categories)
+            return page.entries, page.cursor
+
         return paginate(
-            lambda p: self.account_history(account_address, p, categories),
+            fetch,
             pagination or PaginationWithOrder(),
             lambda p, cursor: replace(p, start=cursor),
         )

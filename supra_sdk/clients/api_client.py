@@ -25,6 +25,9 @@ from the pool."""
 OLDEST_BLOCK_HEADER = "x-supra-oldest-block"
 """Response header in which the node reports the height of the oldest block it still stores."""
 
+HISTORY_INDEXED_FROM_HEADER = "x-supra-history-indexed-from"
+"""Response header in which the node reports the lowest block height the account history covers."""
+
 # Statuses after which a GET is repeated when `ApiClientConfig.retry` is set.
 _RETRYABLE_STATUSES = frozenset(
     {
@@ -407,6 +410,26 @@ class ApiRequestTimeoutError(ApiError):
     request. A GET can be repeated, which `RetryPolicy` does when set."""
 
 
+def parse_height_header(headers: Mapping[str, str], name: str) -> int | None:
+    """Reads a block height from a response header.
+
+    Args:
+        headers (Mapping[str, str]): The response headers.
+        name (str): Name of the header.
+
+    Returns:
+        int | None: The height, or `None` when the header is absent or its value, once stripped, is not decimal digits.
+
+    """
+    value = headers.get(name)
+    if value is None or not _DECIMAL.fullmatch(value.strip()):
+        return None
+    # ValueError: more digits than `int` converts (`sys.get_int_max_str_digits`).
+    with contextlib.suppress(ValueError):
+        return int(value)
+    return None
+
+
 class ApiGoneError(ApiError):
     """Exception raised when the API returns 410: the requested data existed, but the node has pruned it.
 
@@ -436,12 +459,7 @@ class ApiGoneError(ApiError):
 
         """
         super().__init__(message, status_code, headers, body)
-        value = self.headers.get(OLDEST_BLOCK_HEADER)
-        self.oldest_block = None
-        if value is not None and _DECIMAL.fullmatch(value.strip()):
-            # ValueError: more digits than `int` converts (`sys.get_int_max_str_digits`).
-            with contextlib.suppress(ValueError):
-                self.oldest_block = int(value)
+        self.oldest_block = parse_height_header(self.headers, OLDEST_BLOCK_HEADER)
 
 
 class ApiRateLimitError(ApiError):

@@ -357,6 +357,27 @@ class AccountHistoryCategory(str, Enum):
     DA = "da"
 
 
+@dataclass(frozen=True)
+class AccountHistoryPage:
+    """One page of an account's history, as returned by `AccountRestClient.account_history`.
+
+    Attributes:
+        entries (list[dict[str, Any]]): The entries, each `{"categories": [...], "transaction": {...}}`.
+        cursor (str | None): Cursor to retrieve the next page, or `None` when the history has ended.
+        indexed_from (int | None): The lowest block height the account history covers, from the
+            `x-supra-history-indexed-from` response header. Present while blocks below it remain unindexed; the
+            transactions of those blocks are not listed. `None` when the header is absent or not a decimal integer.
+        oldest_block (int | None): Height of the oldest block the node holds, from the `x-supra-oldest-block`
+            response header. `None` when the header is absent or not a decimal integer.
+
+    """
+
+    entries: list[dict[str, Any]]
+    cursor: str | None
+    indexed_from: int | None
+    oldest_block: int | None
+
+
 class TransactionType(str, Enum):
     """Enumeration of transaction types.
 

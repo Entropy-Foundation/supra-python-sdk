@@ -12,6 +12,7 @@ from supra_sdk.clients import ApiClient, ApiNotFoundError
 from supra_sdk.clients.rest.paging import next_cursor
 from supra_sdk.clients.rest.rest_types import (
     AccountHistoryCategory,
+    AccountHistoryPage,
     AutomatedTransactionsPagination,
     EventsPagination,
     Pagination,
@@ -666,18 +667,61 @@ class AccountHistoryTests(unittest.IsolatedAsyncioTestCase):
         self.node = await FakeNode.create(lambda _: self.response)
         client = self.node.client
         self.response = page([], "0")
-        self.assertEqual(await client.account_history(ADDRESS), ([], "0"))
+        self.assertEqual(await self.history(client), ([], "0"))
         self.response = page([], "7")
         self.assertEqual(
-            await client.account_history(ADDRESS, PaginationWithOrder(start="7")),
+            await self.history(client, PaginationWithOrder(start="7")),
             ([], "7"),
         )
         self.response = page([{"n": 1}], "0")
-        self.assertEqual(await client.account_history(ADDRESS), ([{"n": 1}], "0"))
+        self.assertEqual(await self.history(client), ([{"n": 1}], "0"))
         self.response = page([{"n": 1}], None)
-        self.assertEqual(await client.account_history(ADDRESS), ([{"n": 1}], None))
+        self.assertEqual(await self.history(client), ([{"n": 1}], None))
         self.response = page([], "")
-        self.assertEqual(await client.account_history(ADDRESS), ([], None))
+        self.assertEqual(await self.history(client), ([], None))
+
+    async def history(
+        self, client: SupraClient, pagination: PaginationWithOrder | None = None
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        result = await client.account_history(ADDRESS, pagination)
+        return result.entries, result.cursor
+
+    async def test_returns_the_coverage_headers(self):
+        headers = {
+            CURSOR: "5",
+            "x-supra-history-indexed-from": "120",
+            "x-supra-oldest-block": "7",
+        }
+        self.node = await FakeNode.create(
+            lambda _: httpx.Response(200, json=[{"n": 1}], headers=headers)
+        )
+        result = await self.node.client.account_history(ADDRESS)
+        self.assertEqual(
+            result,
+            AccountHistoryPage(
+                entries=[{"n": 1}], cursor="5", indexed_from=120, oldest_block=7
+            ),
+        )
+
+    async def test_absent_coverage_headers_are_none(self):
+        self.node = await FakeNode.create(lambda _: page([], None))
+        result = await self.node.client.account_history(ADDRESS)
+        self.assertIsNone(result.indexed_from)
+        self.assertIsNone(result.oldest_block)
+
+    async def test_a_non_decimal_coverage_header_is_none(self):
+        for value in ("abc", "-1", "1.5", "", "0x10"):
+            headers = {
+                "x-supra-history-indexed-from": value,
+                "x-supra-oldest-block": value,
+            }
+            self.node = await FakeNode.create(
+                lambda _, headers=headers: httpx.Response(200, json=[], headers=headers)
+            )
+            result = await self.node.client.account_history(ADDRESS)
+            self.assertIsNone(result.indexed_from, value)
+            self.assertIsNone(result.oldest_block, value)
+            await self.node.close()
 
     async def test_a_node_without_the_route_raises_not_found_error(self):
         self.node = await FakeNode.create(lambda _: httpx.Response(404))
