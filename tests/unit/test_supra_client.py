@@ -272,8 +272,8 @@ class TestSupraClientEndpointsIntegration(unittest.IsolatedAsyncioTestCase):
         if uses_coin_store:
             self.assertEqual(len(page), 1)
         else:
-            # An empty listing carries no cursor.
-            self.assertEqual((page, cursor), ([], ""))
+            # The method reports the end of the feed as a `None` cursor.
+            self.assertEqual((page, cursor), ([], None))
 
         # The deposit event type follows the receiver's layout, not the sender's.
         receiver = AccountAddress.from_str("0x1")
