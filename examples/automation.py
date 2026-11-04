@@ -13,7 +13,11 @@ from supra_sdk.bcs import Serializer
 from supra_sdk.clients.rest import SupraClient
 from supra_sdk.clients.rest.supra_client import TransactionFailedError
 from supra_sdk.clients.rest.transaction_defaults import MaxGasEstimationError
-from supra_sdk.transactions import EntryFunction, TransactionArgument
+from supra_sdk.transactions import (
+    EntryFunction,
+    TransactionArgument,
+    TransactionPayload,
+)
 
 TASK_DURATION_SECONDS = 3600
 
@@ -37,6 +41,51 @@ async def outside_cycle_transition(action: Callable[[], Awaitable[str]]) -> str:
     raise AssertionError("unreachable")
 
 
+# Max gas of the simulated transaction. The node checks that the sender's balance covers
+# it at the gas price, so it stays below what a faucet-funded account holds; raise it for
+# a function that uses more.
+SIMULATION_MAX_GAS = 5_000
+# The automated transaction runs in a later block, on state that may differ from the
+# simulated one, so the task's max gas is this many times the simulated gas.
+MAX_GAS_FACTOR = 2
+# The registry's fee estimate rises with the gas other tasks have committed, which can
+# change before the registration is included, so the fee cap is this many times the
+# estimate.
+FEE_CAP_FACTOR = 2
+
+
+async def automation_task_limits(
+    supra_client: SupraClient, sender: Account, automated_function: EntryFunction
+) -> tuple[int, int]:
+    """Returns the max gas and the fee cap for the epoch to register a task with.
+
+    The max gas is `MAX_GAS_FACTOR` times the gas that `automated_function` uses when
+    `sender` sends it as a user transaction. The fee cap is `FEE_CAP_FACTOR` times
+    the registry's estimate of the epoch fee for that max gas
+    (`0x1::automation_registry::estimate_automation_fee`). The registry refuses a
+    registration whose cap is below its estimate, and charges the cap at registration.
+    """
+    simulation = await supra_client.simulate_transaction(
+        await supra_client.create_signed_transaction(
+            sender,
+            TransactionPayload(automated_function),
+            max_gas_amount=SIMULATION_MAX_GAS,
+        )
+    )
+    move_output = simulation["output"]["Move"]
+    if simulation["status"] != "Success":
+        raise RuntimeError(f"The automated function does not succeed: {move_output}")
+    max_gas = MAX_GAS_FACTOR * int(move_output["gas_used"])
+    estimated_fee = int(
+        (
+            await supra_client.view(
+                "0x1::automation_registry::estimate_automation_fee", [], [str(max_gas)]
+            )
+        )[0]
+    )
+    return max_gas, FEE_CAP_FACTOR * estimated_fee
+
+
 async def main() -> None:
     supra_client = SupraClient(RPC_NODE_URL)
     sender = Account.generate()
@@ -53,6 +102,9 @@ async def main() -> None:
             TransactionArgument(AccountAddress.from_str("0x1"), Serializer.struct),
             TransactionArgument(1, Serializer.u64),
         ],
+    )
+    max_gas, fee_cap_for_epoch = await automation_task_limits(
+        supra_client, sender, automated_function
     )
     # Without a task type the task is registered with version 1 of the registration
     # parameters. `automation_task_type` selects version 2. `automation_priority` is
@@ -76,9 +128,9 @@ async def main() -> None:
         lambda: supra_client.register_automation_task(
             sender,
             automated_function,
-            9,
+            max_gas,
             gas_price_cap,
-            1 * (10**8),
+            fee_cap_for_epoch,
             expiry_time,
             [],
         )

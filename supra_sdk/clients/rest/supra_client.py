@@ -882,9 +882,12 @@ class SupraClient(
             owner_account (Account): Account registering an automation task.
                 It will be eligible to cancel or stop task.
             automated_function (str): Automated entry function payload.
-            automation_max_gas_amount (int): Max gas allowed for automation.
+            automation_max_gas_amount (int): Max gas allowed for automation. An automated transaction that needs
+                more gas than this fails, and its owner pays for the gas it used. Simulate the automated function
+                as a user transaction and use its gas with a margin (see `examples/automation.py`).
             automation_gas_price_cap (int): Gas price cap for automation execution.
-            automation_fee_cap_for_epoch (int): Maximum total fee for the epoch.
+            automation_fee_cap_for_epoch (int): Maximum total fee for the epoch. The registry refuses a cap below
+                its estimate for the max gas (the view `0x1::automation_registry::estimate_automation_fee`).
             automation_expiration_timestamp_secs (int): Expiration time for automation.
             automation_aux_data (list[bytes]): Auxiliary data for automation.
             automation_task_type (AutomationTaskType | None): ``USER`` or ``SYSTEM``.
