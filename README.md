@@ -13,6 +13,30 @@ The `supra-python-sdk` provides a seamless interface for interacting with the Su
 python -m pip install supra-sdk
 ```
 
+## Compatibility
+
+The SDK is tested against Supra node `supra_node_v11.7.2` (Mainnet and Testnet) and `supra_node_v12.0.0.rc7` (Devnet).
+It calls `/rpc/v3` only.
+
+These need a node from `supra_node_v12.0.0`. On a `supra_node_v11.7.2` node they behave as described:
+
+| Method or parameter | On a `supra_node_v11.7.2` node |
+|---|---|
+| `account_history`, `iter_account_history` | The node answers HTTP 404 with an empty body, raised as `ApiNotFoundError` with the message `Not Found`. |
+| The `settlement` value of `transaction_type` (`account_coin_transactions`, `account_fa_transactions` and their iterators) | The node rejects it as an unknown `type`. |
+| `version()`: the `release` field | The key is absent from the response of every v11 release and of `supra_node_v12.0.0.rc1` to `rc6`; it is present from `supra_node_v12.0.0.rc7`. |
+| `sequence_number=0` for a sender without an account (`SupraClient.create_fee_payer_transaction`) | The SDK builds and returns the signed transaction, and the node refuses its submission (HTTP 400, "Transaction validation failed: Failed to read the AccountResource"). |
+
+Other behaviour that differs by node release is described in the sections below and in the docstrings:
+
+- Where an account holds SUPRA, and which method lists its movements: [SUPRA as a fungible asset](#supra-as-a-fungible-asset)
+  and [Listing an account's SUPRA movements](#listing-an-accounts-supra-movements). A chain created with features 64
+  and 65 on (Devnet on `supra_node_v12.0.0`) has no `CoinStore<SupraCoin>`.
+- How a feed ends (the `None` cursor, and the cursor `"0"` of a v11.7.x node on an empty page):
+  [SUPRA as a fungible asset](#supra-as-a-fungible-asset), `account_coin_transactions` and `account_history`.
+- The error for a missing account: `ApiNotFoundError` (404) on a v12 node, `ApiError` (400) on an earlier node;
+  see the `ApiNotFoundError` docstring and [Errors, timeouts and retries](#errors-timeouts-and-retries).
+
 ## Usage
 
 Check [examples](examples/README.md) section.
