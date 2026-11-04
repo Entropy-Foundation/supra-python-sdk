@@ -611,6 +611,14 @@ class TypedAscendingFeedTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.sent(), [None])
         self.assertEqual(self.node.params(0), {"ascending": "true"})
 
+    async def test_an_empty_fa_filter_is_not_sent_and_zero_ends_the_feed(self):
+        self.node = await FakeNode.create(lambda _: page([], "0"))
+        result = await self.node.client.account_fa_transactions(
+            ADDRESS, PaginationWithOrder(ascending=True), transaction_type=""
+        )
+        self.assertEqual(result, ([], None))
+        self.assertEqual(self.node.params(0), {"ascending": "true"})
+
 
 class AccountHistoryTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):

@@ -32,6 +32,22 @@ from supra_sdk.fungible_asset import (
 )
 
 
+def _type_param(transaction_type: TransactionType | str | None) -> str | None:
+    """The `type` query parameter for a transaction type filter, or `None` when there is no filter.
+
+    An empty `transaction_type` is not a type, so, like an empty `start`, it is not sent.
+
+    """
+    if transaction_type is None:
+        return None
+    value = str(
+        transaction_type.value
+        if isinstance(transaction_type, TransactionType)
+        else transaction_type
+    )
+    return value or None
+
+
 class AccountRestClient(RestClient):
     """A class that provides methods to invoke `Account` REST endpoints from a Supra RPC node.
 
@@ -265,14 +281,10 @@ class AccountRestClient(RestClient):
             ACCOUNT_COIN_TRANSACTIONS_ENDPOINT, account_address=account_address
         )
         params = pagination.to_params() if pagination else {}
-        # An empty `transaction_type` is not a type, so, like an empty `start`, it is not sent.
-        filtered = transaction_type is not None and transaction_type != ""
-        if filtered:
-            params["type"] = str(
-                transaction_type.value
-                if isinstance(transaction_type, TransactionType)
-                else transaction_type
-            )
+        type_param = _type_param(transaction_type)
+        filtered = type_param is not None
+        if type_param is not None:
+            params["type"] = type_param
         response = await self.api_client.get(endpoint=endpoint, params=params)
         page = response.json()
         # Without a `type` filter `"0"` on an empty page is the end of the feed on both node lines. With one, the
@@ -358,7 +370,7 @@ class AccountRestClient(RestClient):
         - page without rows and header equal to the request's `start`: `None`.
         - any other page without rows: the header.
 
-        An empty `start` is not sent.
+        An empty `start` and an empty `transaction_type` are not sent.
 
         Args:
             account_address (AccountAddress | str): Address of the account that owns the store, as an
@@ -395,12 +407,9 @@ class AccountRestClient(RestClient):
         start = params.get("start")
         if start is None or start == "":
             params.pop("start", None)
-        if transaction_type is not None:
-            params["type"] = str(
-                transaction_type.value
-                if isinstance(transaction_type, TransactionType)
-                else transaction_type
-            )
+        type_param = _type_param(transaction_type)
+        if type_param is not None:
+            params["type"] = type_param
         response = await self.api_client.get(endpoint=endpoint, params=params)
         page = response.json()
         sent = params.get("start")
@@ -408,7 +417,7 @@ class AccountRestClient(RestClient):
             sent is None
             and pagination is not None
             and pagination.ascending is True
-            and transaction_type is not None
+            and type_param is not None
         )
         return page, next_cursor(
             response, page, sent=sent, zero_continues=zero_continues
