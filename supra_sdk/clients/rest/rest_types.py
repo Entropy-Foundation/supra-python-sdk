@@ -187,7 +187,9 @@ BLOCK_TRANSACTIONS_ENDPOINT = f"{RPC_API_PREFIX}/block/{{block_hash}}/transactio
 
 # Consensus endpoints
 LATEST_CONSENSUS_BLOCK_ENDPOINT = f"{RPC_API_PREFIX}/consensus/block"
-CONSENSUS_BLOCK_BY_HEIGHT_ENDPOINT = f"{RPC_API_PREFIX}/consensus/height/{{height}}"
+CONSENSUS_BLOCK_BY_HEIGHT_ENDPOINT = (
+    f"{RPC_API_PREFIX}/consensus/block/height/{{height}}"
+)
 COMMITTEE_AUTHORIZATION_ENDPOINT = (
     f"{RPC_API_PREFIX}/consensus/committee_authorization/{{epoch}}"
 )
@@ -197,6 +199,11 @@ FAUCET_ENDPOINT = f"{RPC_API_PREFIX}/wallet/faucet/{{address}}"
 FAUCET_TRANSACTION_ENDPOINT = f"{RPC_API_PREFIX}/wallet/faucet/transactions/{{hash}}"
 
 
+def _is_unset(value: Any) -> bool:
+    """True for `None` and for an empty string. The node rejects an empty cursor, so it is never sent."""
+    return value is None or value == ""
+
+
 @dataclass(frozen=True)
 class Pagination:
     """Generic pagination parameters.
@@ -204,7 +211,8 @@ class Pagination:
     Attributes:
         count: Number of items to return, default value is 20 and maximum value is 100.
             In case of `count`>100 only 100 items will be returned.
-        start: Cursor or starting point specifying where to start for pagination.
+        start: Cursor or starting point specifying where to start for pagination. `None` and an empty string leave
+            it out of the request.
 
     """
 
@@ -221,7 +229,7 @@ class Pagination:
         params: dict[str, Any] = {}
         if self.count is not None:
             params["count"] = self.count
-        if self.start is not None:
+        if not _is_unset(self.start):
             params["start"] = self.start
         return params
 
@@ -247,7 +255,7 @@ class PaginationWithOrder(Pagination):
         params: dict[str, Any] = {}
         if self.count is not None:
             params["count"] = self.count
-        if self.start is not None:
+        if not _is_unset(self.start):
             params["start"] = self.start
         if self.ascending is not None:
             params["ascending"] = str(self.ascending).lower()
@@ -263,12 +271,15 @@ class AutomatedTransactionsPagination:
         block_height: Start block height to consider for transaction retrieval.
         count: Number of items to return, default value is 20 and maximum value is 100.
             In case of `count`>100 only 100 items will be returned.
+        cursor: The cursor returned with the previous page, to continue from. When set, `block_height` is ignored by
+            the node. `None` and an empty string leave it out of the request.
 
     """
 
     ascending: bool | None = None
     block_height: int | None = None
     count: int | None = None
+    cursor: str | None = None
 
     def to_params(self) -> dict[str, Any]:
         """Converts the pagination configuration to a dictionary of query parameters.
@@ -284,6 +295,8 @@ class AutomatedTransactionsPagination:
             params["block_height"] = self.block_height
         if self.count is not None:
             params["count"] = self.count
+        if not _is_unset(self.cursor):
+            params["cursor"] = self.cursor
         return params
 
 
@@ -295,7 +308,8 @@ class EventsPagination:
         start_height (Optional[int]): Starting block height (inclusive).
         end_height (Optional[int]): Ending block height (exclusive).
         limit (Optional[int]): Maximum number of events to return. Defaults to 20, max 100.
-        start (Optional[str]): The cursor to start the query from.
+        start (Optional[str]): The cursor to start the query from. `None` and an empty string leave it out of the
+            request.
 
     """
 
@@ -318,7 +332,7 @@ class EventsPagination:
             params["end_height"] = self.end_height
         if self.limit is not None:
             params["limit"] = self.limit
-        if self.start is not None:
+        if not _is_unset(self.start):
             params["start"] = self.start
         return params
 
