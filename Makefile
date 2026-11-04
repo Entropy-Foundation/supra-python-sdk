@@ -40,11 +40,14 @@ audit:
 ci: lint fmt-check typecheck test-unit test-spec test-coverage build audit
 
 # `make examples` runs every example, in this order, against the node at
-# SUPRA_RPC_NODE_URL. It runs all of them even when one fails, then fails if any
-# failed and lists those. The examples send transactions, so the target needs
-# SUPRA_RPC_NODE_URL set; see examples/README.md for the other variables. For example:
+# SUPRA_RPC_NODE_URL, except those named in EXAMPLES_EXCLUDE. It runs all of them even
+# when one fails, then fails if any failed and lists those. The examples send
+# transactions, so the target needs SUPRA_RPC_NODE_URL set; see examples/README.md for
+# the other variables. For example:
 #   SUPRA_RPC_NODE_URL=http://localhost:27001 make examples
 #   SUPRA_RPC_NODE_URL=https://rpc-devnet.supra.com SUPRA_EXAMPLES_PRIVATE_KEY=<key> make examples
+#   SUPRA_EXAMPLES_PRIVATE_KEY="$(uv run python -m examples.faucet_funder)" make examples EXAMPLES_EXCLUDE=faucet
+EXAMPLES_EXCLUDE ?=
 EXAMPLES = automation faucet fee_payer_transfer_coin fungible_asset hello_blockchain multisig \
 	rotate_key simple_nft simple_supra_token simulate_transfer_coin supra_token \
 	transfer_coin transfer_two_by_two your_coin
@@ -55,7 +58,7 @@ examples:
 		exit 1; \
 	fi
 	@failed=""; \
-	for example in $(EXAMPLES); do \
+	for example in $(filter-out $(EXAMPLES_EXCLUDE),$(EXAMPLES)); do \
 		echo "=== examples.$$example ==="; \
 		uv run python -m examples.$$example || failed="$$failed $$example"; \
 	done; \

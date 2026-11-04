@@ -42,13 +42,31 @@ Every example generates fresh accounts. It funds them in one of two ways:
 Before funding, an example checks that the funding account holds the SUPRA it is about to send plus 2,000 units of gas
 per transfer at the node's minimum gas price, and otherwise stops with the shortfall in SUPRA.
 
-The Devnet faucet limits the requests from one IP address, so running more than one example against Devnet needs
-`SUPRA_EXAMPLES_PRIVATE_KEY`. A localnet faucet has no such limit. Each generated account receives 10 SUPRA
-(`multisig.py`: 30 SUPRA for each account that sends transactions, 1 SUPRA for each signer); a full run of
-`make examples` takes about 325 SUPRA from the funding account, most of it left in the generated accounts.
+Without a key, each example makes its own faucet request, and the Devnet faucet limits the requests from one IP
+address (across all its endpoints), so it can refuse them when several examples run in a row. A localnet faucet has no
+such limit. To run all the examples against Devnet, either set `SUPRA_EXAMPLES_PRIVATE_KEY` to a funded account, or
+create one from a single faucet grant with `examples/faucet_funder.py`:
+
+```bash
+SUPRA_EXAMPLES_PRIVATE_KEY="$(uv run python -m examples.faucet_funder)" make examples EXAMPLES_EXCLUDE=faucet
+```
+
+`faucet_funder.py` generates an account, requests SUPRA for it once (with the retry on `TryLater` described above),
+waits until the balance shows, and prints only the private key on stdout; the address and the progress go to stderr.
+On Devnet the funder holds 5,000 SUPRA from the grant, and a run of all the examples uses about 325 SUPRA of it.
+`EXAMPLES_EXCLUDE=faucet` leaves out `faucet.py`, because its own request would be a second faucet request from the
+same IP address.
+
+Each generated account receives 10 SUPRA (`multisig.py`: 30 SUPRA for each account that sends transactions, 1 SUPRA for
+each signer); a full run of `make examples` takes about 325 SUPRA from the funding account, most of it left in the
+generated accounts.
 
 Two runs that use the same `SUPRA_EXAMPLES_PRIVATE_KEY` at the same time send transactions from the same account and
 race for its sequence numbers, so their funding transfers can fail. Run one at a time per key.
+
+The scheduled workflow `.github/workflows/examples.yaml` runs the examples against Devnet that way, once a day and on
+manual dispatch. It uses no repository secret: each run creates a funder account with one faucet request, masks its
+key in the log, and runs `make examples EXAMPLES_EXCLUDE=faucet` from that account.
 
 Keep private keys in environment variables or an untracked file. Do not commit them.
 
@@ -79,6 +97,8 @@ SUPRA_RPC_NODE_URL=https://rpc-devnet.supra.com SUPRA_EXAMPLES_PRIVATE_KEY=<key>
 SUPRA_RPC_NODE_URL=http://localhost:27001 make examples
 ```
 
+`EXAMPLES_EXCLUDE` names the examples to leave out, for example `make examples EXAMPLES_EXCLUDE="faucet rotate_key"`.
+
 An example exits with a non-zero status when a step raises, which includes every transaction that does not end with
 status `Success`.
 
@@ -101,7 +121,8 @@ status `Success`.
 | [`transfer_two_by_two.py`](./transfer_two_by_two.py) | A multi-agent Move script (`two_by_two_transfer.mv`) with two senders and two receivers |
 | [`your_coin.py`](./your_coin.py) | Publishing the `moon_coin` package, a managed coin, and registering, minting and transferring the coin |
 
-[`common.py`](./common.py) reads the environment and funds the generated accounts.
+[`common.py`](./common.py) reads the environment and funds the generated accounts. [`faucet_funder.py`](./faucet_funder.py)
+is not an example: it creates the funded account described under [Environment](#environment).
 
 ## Move packages
 

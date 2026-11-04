@@ -1,9 +1,11 @@
 name: Examples on Devnet
 
-# Runs every example in `examples/` against Devnet with `make examples`. The examples fund the accounts they generate
-# from the account of the repository secret SUPRA_EXAMPLES_PRIVATE_KEY (an Ed25519 private key, 32 bytes as hex, of an
-# account funded on Devnet). Without the secret, or with a secret that is only whitespace, the job skips the examples
-# and reports a notice.
+# Runs the examples in `examples/` against Devnet with `make examples`. The workflow needs no repository secret. Each
+# run creates a throwaway account (`examples/faucet_funder.py`), funds it with one request to the Devnet faucet, and
+# runs the examples from that account: they fund the accounts they generate by transfers from it and request nothing
+# from the faucet. `faucet.py` is excluded because its own request would be a second faucet request from the
+# runner's IP address, and the funding step makes the same SDK faucet call. The key of the throwaway account is
+# masked in the log and never written anywhere else.
 
 on:
   schedule:
@@ -13,7 +15,8 @@ on:
 permissions:
   contents: read
 
-# Two runs sending transactions from the same account at once would race for its sequence numbers.
+# The Devnet faucet limits requests per IP address, and runners share addresses. One run at a time keeps two runs from
+# drawing on the faucet allowance of one IP address at once.
 concurrency:
   group: examples-devnet
   cancel-in-progress: false
@@ -28,49 +31,30 @@ jobs:
       UV_PYTHON: "3.12"
 
     steps:
-      # The examples treat a key that is empty or only whitespace as unset, so this step decides the same way.
-      # The secret reaches the step through `env`; the step writes only whether a key is present.
-      - name: Check for a funded key
-        id: key
-        env:
-          KEY: ${{ secrets.SUPRA_EXAMPLES_PRIVATE_KEY }}
-        run: |
-          stripped="${KEY//[[:space:]]/}"
-          if [ -n "$stripped" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Skip without a funded key
-        if: steps.key.outputs.present != 'true'
-        run: echo "::notice title=Examples skipped::The repository secret SUPRA_EXAMPLES_PRIVATE_KEY is not set, so no example ran."
-
       - name: Checkout code
-        if: steps.key.outputs.present == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install uv
-        if: steps.key.outputs.present == 'true'
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.7"
           python-version: "3.12"
 
       - name: Install dependencies
-        if: steps.key.outputs.present == 'true'
         run: uv sync --frozen
 
-      # The uv release and the packages are fixed before the key is present: setup-uv installs the pinned uv, and
-      # the step above installs the packages from uv.lock. The key is visible to this step only. UV_FROZEN makes
-      # `uv run` use uv.lock without resolving, and UV_NO_SYNC makes it skip syncing the environment, so nothing is
-      # resolved, downloaded or installed while the key is present.
-      - name: Run the examples
-        if: steps.key.outputs.present == 'true'
+      # The uv release and the packages are fixed by the steps above. UV_FROZEN makes `uv run` use uv.lock without
+      # resolving, and UV_NO_SYNC makes it skip syncing the environment, so nothing is resolved, downloaded or
+      # installed once the key exists. The funder prints only the private key on stdout; `::add-mask::` hides it in
+      # the log before anything else can print it.
+      - name: Fund an account and run the examples
         env:
-          SUPRA_EXAMPLES_PRIVATE_KEY: ${{ secrets.SUPRA_EXAMPLES_PRIVATE_KEY }}
           UV_FROZEN: "1"
           UV_NO_SYNC: "1"
-        run: make examples
+        run: |
+          set -euo pipefail
+          key="$(uv run python -m examples.faucet_funder)"
+          echo "::add-mask::$key"
+          SUPRA_EXAMPLES_PRIVATE_KEY="$key" make examples EXAMPLES_EXCLUDE=faucet
