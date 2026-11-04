@@ -1,12 +1,21 @@
 import os
 import sys
+from importlib.metadata import PackageNotFoundError, version as distribution_version
 
 sys.path.insert(0, os.path.abspath(".."))
 
 project = "supra-sdk"
 copyright = "2025, Supra Labs"
 author = "Supra Labs"
-release = "0.1.0"
+
+try:
+    release = distribution_version("supra-sdk")
+except PackageNotFoundError as error:
+    raise RuntimeError(
+        "The supra-sdk distribution is not installed, so the documentation version "
+        "cannot be read. Run `uv sync` and build with `make build-docs`."
+    ) from error
+version = release
 
 extensions = [
     "sphinx.ext.autodoc",

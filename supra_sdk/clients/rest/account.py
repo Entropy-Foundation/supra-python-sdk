@@ -535,8 +535,8 @@ class AccountRestClient(RestClient):
         `account_coin_transactions` does not.
 
         Needs a node from `supra_node_v12.0.0`. A node before v12 (Testnet and Mainnet until they run v12) answers
-        HTTP 404 with an empty body, raised as `supra_sdk.clients.api_client.ApiError` with `status_code` 404 and an
-        empty `message`.
+        HTTP 404 with an empty body, raised as `supra_sdk.clients.api_client.ApiNotFoundError` (a subclass of
+        `ApiError`) with `status_code` 404 and the message `Not Found`, the HTTP reason phrase.
 
         Automated transactions and automation registry records are not listed; use
         `account_automated_transactions` for those. While the node sends the `x-supra-history-indexed-from` response

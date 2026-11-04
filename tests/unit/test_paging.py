@@ -8,8 +8,7 @@ from typing import Any
 import httpx
 
 from supra_sdk.account_address import AccountAddress
-from supra_sdk.clients import ApiClient
-from supra_sdk.clients.api_client import ApiError
+from supra_sdk.clients import ApiClient, ApiNotFoundError
 from supra_sdk.clients.rest.paging import next_cursor
 from supra_sdk.clients.rest.rest_types import (
     AccountHistoryCategory,
@@ -680,12 +679,12 @@ class AccountHistoryTests(unittest.IsolatedAsyncioTestCase):
         self.response = page([], "")
         self.assertEqual(await client.account_history(ADDRESS), ([], None))
 
-    async def test_a_node_without_the_route_raises_api_error(self):
+    async def test_a_node_without_the_route_raises_not_found_error(self):
         self.node = await FakeNode.create(lambda _: httpx.Response(404))
-        with self.assertRaises(ApiError) as raised:
+        with self.assertRaises(ApiNotFoundError) as raised:
             await self.node.client.account_history(ADDRESS)
         self.assertEqual(raised.exception.status_code, 404)
-        self.assertEqual(raised.exception.message, "")
+        self.assertEqual(raised.exception.message, "Not Found")
 
     async def test_iterator_pages_past_an_empty_page_and_the_zero_cursor(self):
         # The node filters by category while it scans: a page can be empty and carry a cursor, and "0" is the
