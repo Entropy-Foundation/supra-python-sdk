@@ -72,6 +72,7 @@ Accounts that still hold a `CoinStore` balance keep it there until they migrate 
   `None` at the end of the feed on v11.7.x and v12 nodes (the method reads a v11.7.x node's `"0"` on an empty page as
   the end). Stop when the cursor is `None`, not on an empty page or on `"0"`: a page filtered by `transaction_type`
   can be empty and still carry a cursor to continue from, and `"0"` can be the position of a genesis row.
+  `iter_account_fa_transactions` takes the same arguments and follows the cursor until the feed ends.
 
 ```python
 balance = await client.account_fa_balance(alice.address())
@@ -85,6 +86,28 @@ takes a `coin_type`). See [`examples/fungible_asset.py`](examples/fungible_asset
 ## Reference Docs
 
 For the function specific documentation, check out the `supra-python-sdk` [reference documentation](https://supra-python-sdk.docs.supra.com/).
+
+## Listing an account's SUPRA movements
+
+Which method lists them depends on where the account holds SUPRA:
+
+- Coin layout (Mainnet and Testnet accounts created before governance enables feature 64 or 65): SUPRA is in the
+  account's `CoinStore<SupraCoin>`, and `account_coin_transactions` lists its movements.
+- Primary-store layout: SUPRA is in the account's primary fungible store, and `account_coin_transactions` lists
+  none of its movements. While feature 64 or 65 is enabled, registering SUPRA creates the primary store instead of a
+  `CoinStore<SupraCoin>`, so new accounts hold SUPRA there; so does an account that migrated its SUPRA. On a chain
+  created with features 64 and 65 on, such as Devnet on `supra_node_v12.0.0`, no account has a
+  `CoinStore<SupraCoin>`. Use `account_history` with the category `fa` (nodes from `supra_node_v12.0.0`) or
+  `account_fa_transactions`. SUPRA transfers emit `0x1::fungible_asset::Withdraw` and `Deposit` events, whose `store`
+  field names the fungible store, not the account, and no `0x1::coin` events.
+
+```python
+entries, cursor = await client.account_history(address, categories=["fa"])
+async for entry in client.iter_account_history(address, categories=["sent", "fa"]):
+    print(entry["categories"], entry["transaction"]["hash"])
+async for transaction in client.iter_account_fa_transactions(address):
+    print(transaction["hash"])
+```
 
 ## Contributing
 
