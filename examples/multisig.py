@@ -2,13 +2,23 @@
 # Parts of the project are originally copyright © Aptos Foundation
 # SPDX-License-Identifier: Apache-2.0
 
+"""A 2-of-3 MultiEd25519 account: a transfer, a key rotation to the multisig key, a
+package publication and upgrade, and a Move script, all signed by the multisig.
+
+The packages are the `upgrade_and_govern` packages of `examples/move/packages.json`.
+`python -m examples.multisig true` pauses between the steps.
+"""
+
 import asyncio
 import sys
 from typing import cast
 
-import aiofiles
-
-from examples.common import RPC_NODE_URL, SUPRA_CORE_PATH
+from examples.common import (
+    QUANTS_PER_SUPRA,
+    RPC_NODE_URL,
+    compiled_package,
+    fund_accounts,
+)
 from supra_sdk import ed25519
 from supra_sdk.account import Account, RotationProofChallenge
 from supra_sdk.account_address import AccountAddress
@@ -33,6 +43,13 @@ should_wait = True
 # 1,700 units) and a package publish (about 2,000 units).
 MAX_GAS_AMOUNT = 20_000
 
+# The balance of each account that sends a transaction with MAX_GAS_AMOUNT must cover
+# MAX_GAS_AMOUNT at the gas unit price (20 SUPRA at the minimum price of 100,000 quants).
+MULTISIG_SENDER_FUNDING_QUANTS = 30 * QUANTS_PER_SUPRA
+
+# The signers send no transaction; they receive the transfers of the example.
+SIGNER_FUNDING_QUANTS = 1 * QUANTS_PER_SUPRA
+
 
 def wait():
     """Wait for user to press Enter before starting next section."""
@@ -40,7 +57,7 @@ def wait():
         input("\nPress Enter to continue...")
 
 
-async def main(should_wait_input: bool):
+async def main(should_wait_input: bool) -> None:
     global should_wait
     should_wait = should_wait_input
 
@@ -81,10 +98,14 @@ async def main(should_wait_input: bool):
     wait()
 
     print("\n=== Funding accounts ===")
-    await supra_client.faucet(alice.address())
-    await supra_client.faucet(bob.address())
-    await supra_client.faucet(chad.address())
-    await supra_client.faucet(multisig_address)
+    await fund_accounts(
+        supra_client,
+        [alice.address(), bob.address(), chad.address()],
+        SIGNER_FUNDING_QUANTS,
+    )
+    await fund_accounts(
+        supra_client, [multisig_address], MULTISIG_SENDER_FUNDING_QUANTS
+    )
 
     alice_balance = await supra_client.account_supra_balance(alice.address())
     bob_balance = await supra_client.account_supra_balance(bob.address())
@@ -162,7 +183,9 @@ async def main(should_wait_input: bool):
     print(f"Deedee's address:    {deedee.address()}")
     print(f"Deedee's public key: {deedee.public_key()}")
 
-    await supra_client.faucet(deedee.address())
+    await fund_accounts(
+        supra_client, [deedee.address()], MULTISIG_SENDER_FUNDING_QUANTS
+    )
     deedee_balance = await supra_client.account_supra_balance(deedee.address())
     print(f"Deedee's balance:    {deedee_balance}")  # <:!:section_7
     wait()
@@ -217,29 +240,9 @@ async def main(should_wait_input: bool):
     wait()
 
     print("\n=== Genesis publication ===")
-    packages_dir = f"{SUPRA_CORE_PATH}/aptos-move/move-examples/upgrade_and_govern/"
-
-    command = (
-        f"supra move tool compile "
-        f"--save-metadata "
-        f"--package-dir {packages_dir}genesis "
-        f"--named-addresses upgrade_and_govern={deedee.address()!s}"
-    )
-
-    print(f"Running supra CLI command: {command}\n")
-    process = await asyncio.create_subprocess_exec(
-        *command.split(),
-    )
-    await process.wait()
-    assert process.returncode == 0, "supra move tool compile failed"
-
-    build_path = f"{packages_dir}genesis/build/UpgradeAndGovern/"
-
-    async with aiofiles.open(f"{build_path}package-metadata.bcs", "rb") as f:
-        package_metadata = await f.read()
-
-    async with aiofiles.open(f"{build_path}bytecode_modules/parameters.mv", "rb") as f:
-        parameters_module = await f.read()
+    genesis_package = compiled_package("upgrade_and_govern_genesis", deedee.address())
+    package_metadata = genesis_package.metadata
+    [parameters_module] = genesis_package.modules
 
     modules_serializer = Serializer.sequence_serializer(Serializer.to_bytes)
 
@@ -283,27 +286,9 @@ async def main(should_wait_input: bool):
     wait()
 
     print("\n=== Upgrade publication ===")
-    command = (
-        f"supra move tool compile "
-        f"--save-metadata "
-        f"--package-dir {packages_dir}upgrade "
-        f"--named-addresses upgrade_and_govern={deedee.address()!s}"
-    )
-
-    print(f"Running supra CLI command: {command}\n")
-    process = await asyncio.create_subprocess_exec(*command.split())
-    await process.wait()
-    assert process.returncode == 0, "supra move tool compile failed"
-    build_path = f"{packages_dir}upgrade/build/UpgradeAndGovern/"
-
-    async with aiofiles.open(f"{build_path}package-metadata.bcs", "rb") as f:
-        package_metadata = await f.read()
-
-    async with aiofiles.open(f"{build_path}bytecode_modules/parameters.mv", "rb") as f:
-        parameters_module = await f.read()
-
-    async with aiofiles.open(f"{build_path}bytecode_modules/transfer.mv", "rb") as f:
-        transfer_module = await f.read()
+    upgrade_package = compiled_package("upgrade_and_govern_upgrade", deedee.address())
+    package_metadata = upgrade_package.metadata
+    [parameters_module, transfer_module] = upgrade_package.modules
 
     entry_function_payload = EntryFunction.natural(
         module="0x1::code",
@@ -349,10 +334,7 @@ async def main(should_wait_input: bool):
     wait()
 
     print("\n=== Invoking Move script ===")
-    async with aiofiles.open(
-        f"{build_path}bytecode_scripts/set_and_transfer.mv", "rb"
-    ) as f:
-        script_code = await f.read()
+    [script_code] = upgrade_package.scripts
     script_payload = Script(
         code=script_code,
         ty_args=[],

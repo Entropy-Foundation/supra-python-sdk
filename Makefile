@@ -39,18 +39,31 @@ audit:
 
 ci: lint fmt-check typecheck test-unit test-spec test-coverage build audit
 
+# `make examples` runs every example, in this order, against the node at
+# SUPRA_RPC_NODE_URL. It runs all of them even when one fails, then fails if any
+# failed and lists those. The examples send transactions, so the target needs
+# SUPRA_RPC_NODE_URL set; see examples/README.md for the other variables. For example:
+#   SUPRA_RPC_NODE_URL=http://localhost:27001 make examples
+#   SUPRA_RPC_NODE_URL=https://rpc-devnet.supra.com SUPRA_EXAMPLES_PRIVATE_KEY=<key> make examples
+EXAMPLES = automation faucet fee_payer_transfer_coin fungible_asset hello_blockchain multisig \
+	rotate_key simple_nft simple_supra_token simulate_transfer_coin supra_token \
+	transfer_coin transfer_two_by_two your_coin
+
 examples:
-	uv run python -m examples.automation
-	uv run python -m examples.fee_payer_transfer_coin
-	uv run python -m examples.multisig
-	uv run python -m examples.rotate_key
-	uv run python -m examples.simple_nft
-	uv run python -m examples.simple_supra_token
-	uv run python -m examples.simulate_transfer_coin
-	uv run python -m examples.supra_token
-	uv run python -m examples.transfer_coin
-	uv run python -m examples.transfer_two_by_two
-	uv run python -m examples.your_coin
+	@if [ -z "$(strip $(SUPRA_RPC_NODE_URL))" ]; then \
+		echo "Set SUPRA_RPC_NODE_URL to the node to run the examples against (see examples/README.md)"; \
+		exit 1; \
+	fi
+	@failed=""; \
+	for example in $(EXAMPLES); do \
+		echo "=== examples.$$example ==="; \
+		uv run python -m examples.$$example || failed="$$failed $$example"; \
+	done; \
+	if [ -n "$$failed" ]; then \
+		echo "Failed examples:$$failed"; \
+		exit 1; \
+	fi; \
+	echo "All examples passed"
 
 generate-api-docs:
 	uv run sphinx-apidoc -o docs supra_sdk

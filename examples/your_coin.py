@@ -2,20 +2,15 @@
 # Parts of the project are originally copyright © Aptos Foundation
 # SPDX-License-Identifier: Apache-2.0
 
-"""This example depends on the MoonCoin.move module.
+"""Publishes the `moon_coin` package, a managed coin, and mints and transfers the coin.
 
-Steps:
-    * `cd ~/aptos-core/aptos-move/move-examples/moon_coin`
-    * `supra move tool compile --save-metadata --named-addresses MoonCoin=<Alice address from above step>`
-    * `python3 -m examples.your_coin <moon_coin_module_dir> <publisher_private_key>`
+The package is the compiled `moon_coin` package of `examples/move/packages.json`,
+published under Alice's address.
 """
 
 import asyncio
-import os
 
-import aiofiles
-
-from examples.common import RPC_NODE_URL, SUPRA_CORE_PATH
+from examples.common import RPC_NODE_URL, compiled_package, fund_accounts
 from supra_sdk.account import Account
 from supra_sdk.account_address import AccountAddress
 from supra_sdk.bcs import Serializer
@@ -71,7 +66,7 @@ class CoinClient(SupraClient):
         return str(await self.account_coin_balance(account_address, coin_type))
 
 
-async def main():
+async def main() -> None:
     alice = Account.generate()
     bob = Account.generate()
 
@@ -80,35 +75,12 @@ async def main():
 
     supra_client = CoinClient(RPC_NODE_URL)
 
-    await supra_client.faucet(alice.address())
-    await supra_client.faucet(bob.address())
+    await fund_accounts(supra_client, [alice.address(), bob.address()])
 
-    moon_coin_path = f"{SUPRA_CORE_PATH}/aptos-move/move-examples/moon_coin/"
-    command = (
-        f"supra move tool compile "
-        f"--save-metadata "
-        f"--package-dir {moon_coin_path} "
-        f"--named-addresses MoonCoin={alice.address()!s}"
-    )
-    print(f"Running supra CLI command: {command}\n")
-    process = await asyncio.create_subprocess_exec(*command.split())
-    await process.wait()
-    assert process.returncode == 0, "supra move tool compile failed"
-
-    module_path = os.path.join(
-        moon_coin_path, "build", "Examples", "bytecode_modules", "moon_coin.mv"
-    )
-    async with aiofiles.open(module_path, "rb") as f:
-        module = await f.read()
-
-    metadata_path = os.path.join(
-        moon_coin_path, "build", "Examples", "package-metadata.bcs"
-    )
-    async with aiofiles.open(metadata_path, "rb") as f:
-        metadata = await f.read()
+    package = compiled_package("moon_coin", alice.address())
 
     print("\nPublishing MoonCoin package.")
-    await supra_client.publish_package(alice, metadata, [module])
+    await supra_client.publish_package(alice, package.metadata, package.modules)
 
     print("\nBob registers the newly created coin so he can receive it from Alice.")
     await supra_client.register_coin(alice.address(), bob)
@@ -132,6 +104,8 @@ async def main():
     print(f"Alice's updated MoonCoin balance: {balance}")
     balance = await supra_client.get_balance(alice.address(), bob.address())
     print(f"Bob's updated MoonCoin balance: {balance}")
+
+    await supra_client.close()
 
 
 if __name__ == "__main__":

@@ -4,12 +4,12 @@
 
 import asyncio
 
-from examples.common import RPC_NODE_URL
+from examples.common import RPC_NODE_URL, fund_accounts
 from supra_sdk.account import Account
 from supra_sdk.clients.rest import SupraClient
 
 
-async def main():
+async def main() -> None:
     supra_client = SupraClient(RPC_NODE_URL)
 
     alice = Account.generate()
@@ -18,8 +18,7 @@ async def main():
     print(f"Alice account address: {alice.address()}")
     print(f"Bob account address: {bob.address()}")
 
-    await supra_client.faucet(alice.address())
-    await supra_client.faucet(bob.address())
+    await fund_accounts(supra_client, [alice.address(), bob.address()])
 
     print("\n=== Initial Balances ===")
     alice_balance = await supra_client.account_supra_balance(alice.address())
@@ -36,7 +35,7 @@ async def main():
     print(f"Alice: {alice_balance}")
     print(f"Bob: {bob_balance}")
 
-    # Have Alice give Bob another 1_000 coins using BCS
+    # Have Alice give Bob another 1_000 coins
     await supra_client.transfer_supra_coin(alice, bob.address(), 1_000)
 
     print("\n=== Final Balances ===")
@@ -45,7 +44,6 @@ async def main():
     print(f"Alice: {alice_balance}")
     print(f"Bob: {bob_balance}")
 
-    await supra_client.close()
     await supra_client.close()
 
 

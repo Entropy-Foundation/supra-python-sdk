@@ -10,19 +10,20 @@ there is nothing to migrate. On a network where the account still holds a `CoinS
 
 import asyncio
 
-from examples.common import RPC_NODE_URL
+from examples.common import RPC_NODE_URL, fund_accounts
 from supra_sdk.account import Account
 from supra_sdk.clients.rest import SupraClient
 from supra_sdk.clients.rest.rest_types import PaginationWithOrder
 
 
-async def main():
+async def main() -> None:
     supra_client = SupraClient(RPC_NODE_URL)
 
     alice = Account.generate()
     bob = Account.generate()
 
-    await supra_client.faucet(alice.address())
+    # Bob only receives the fungible asset transfer, which creates his primary store.
+    await fund_accounts(supra_client, [alice.address()])
 
     # `account_supra_balance` sums the CoinStore and the fungible store; `account_fa_balance` reads the latter.
     print(

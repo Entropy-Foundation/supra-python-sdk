@@ -4,7 +4,7 @@
 
 import asyncio
 
-from examples.common import RPC_NODE_URL
+from examples.common import RPC_NODE_URL, fund_accounts
 from supra_sdk.account import Account
 from supra_sdk.account_address import AccountAddress
 from supra_sdk.clients.rest import SupraClient
@@ -16,7 +16,7 @@ from supra_sdk.clients.supra_token_object import (
 )
 
 
-async def main():
+async def main() -> None:
     supra_client = SupraClient(RPC_NODE_URL)
     token_client = SupraTokenObjectClient(supra_client)
 
@@ -29,8 +29,7 @@ async def main():
     print(f"Alice account address: {alice.address()}")
     print(f"Bob account address: {bob.address()}")
 
-    await supra_client.faucet(alice.address())
-    await supra_client.faucet(bob.address())
+    await fund_accounts(supra_client, [alice.address(), bob.address()])
 
     print("\n=== Creating Collection and Token ===")
 
@@ -106,7 +105,6 @@ async def main():
     token_data = await token_client.read_object(token_addr)
     print(f"Owner: {token_data.resources[Object].owner}\n")
 
-    await supra_client.close()
     await supra_client.close()
 
 

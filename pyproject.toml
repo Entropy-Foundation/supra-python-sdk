@@ -23,9 +23,6 @@ dependencies = [
     "typing-extensions>=4.4.0,<5.0.0",
 ]
 
-[project.optional-dependencies]
-examples = ["aiofiles>=24.1.0"]
-
 [project.urls]
 Homepage = "https://github.com/Entropy-Foundation/supra-python-sdk"
 Documentation = "https://supra-python-sdk.docs.supra.com/"
@@ -81,7 +78,7 @@ docstring-code-format = true
 
 [tool.mypy]
 python_version = "3.12"
-files = ["supra_sdk"]
+files = ["supra_sdk", "examples"]
 warn_unused_ignores = true
 no_implicit_optional = true
 
@@ -98,7 +95,6 @@ module-root = ""
 
 [dependency-groups]
 dev = [
-    "aiofiles>=24.1.0",
     "behave>=1.2.6,<2.0.0",
     "black>=25.1.0",
     "coverage>=7.10.6",
