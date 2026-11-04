@@ -15,7 +15,7 @@ python -m pip install supra-sdk
 
 ## Compatibility
 
-The SDK is tested against Supra node `supra_node_v11.7.2` (Mainnet and Testnet) and `supra_node_v12.0.0.rc7` (Devnet).
+0.2.0 is tested against Supra node `supra_node_v11.7.2` (Mainnet and Testnet) and `supra_node_v12.0.0.rc7` (Devnet).
 It calls `/rpc/v3` only.
 
 These need a node from `supra_node_v12.0.0`. On a `supra_node_v11.7.2` node they behave as described:
