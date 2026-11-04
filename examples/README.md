@@ -34,9 +34,10 @@ Every example generates fresh accounts. It funds them in one of two ways:
   called (except by `faucet.py`, which demonstrates the faucet). The key is never printed; the examples print the
   account's address.
 - Without it, the example funds one generated account from the faucet and that account sends SUPRA to the other
-  generated accounts. Each example makes one faucet request. The faucet can answer `TryLater` when it cannot serve
-  the request yet; the example then sends the request again after 5, 10, 20 and 40 seconds, and fails after the fifth
-  request.
+  generated accounts. The faucet can answer `TryLater` when it cannot serve the request yet. Every example except
+  `faucet.py` then sends the request again after 5, 10, 20 and 40 seconds, so it sends at most five requests, and fails
+  after the fifth `TryLater`. It waits for the faucet transaction once, after the faucet accepts a request.
+  `faucet.py` sends one request and does not send it again.
 
 Before funding, an example checks that the funding account holds the SUPRA it is about to send plus 2,000 units of gas
 per transfer at the node's minimum gas price, and otherwise stops with the shortfall in SUPRA.

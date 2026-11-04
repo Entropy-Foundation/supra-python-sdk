@@ -2,7 +2,8 @@ name: Examples on Devnet
 
 # Runs every example in `examples/` against Devnet with `make examples`. The examples fund the accounts they generate
 # from the account of the repository secret SUPRA_EXAMPLES_PRIVATE_KEY (an Ed25519 private key, 32 bytes as hex, of an
-# account funded on Devnet). Without the secret the job skips the examples and reports a notice.
+# account funded on Devnet). Without the secret, or with a secret that is only whitespace, the job skips the examples
+# and reports a notice.
 
 on:
   schedule:
@@ -23,38 +24,53 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      HAS_FUNDED_KEY: ${{ secrets.SUPRA_EXAMPLES_PRIVATE_KEY != '' }}
       SUPRA_RPC_NODE_URL: https://rpc-devnet.supra.com
       UV_PYTHON: "3.12"
 
     steps:
+      # The examples treat a key that is empty or only whitespace as unset, so this step decides the same way.
+      # The secret reaches the step through `env`; the step writes only whether a key is present.
+      - name: Check for a funded key
+        id: key
+        env:
+          KEY: ${{ secrets.SUPRA_EXAMPLES_PRIVATE_KEY }}
+        run: |
+          stripped="${KEY//[[:space:]]/}"
+          if [ -n "$stripped" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Skip without a funded key
-        if: env.HAS_FUNDED_KEY != 'true'
+        if: steps.key.outputs.present != 'true'
         run: echo "::notice title=Examples skipped::The repository secret SUPRA_EXAMPLES_PRIVATE_KEY is not set, so no example ran."
 
       - name: Checkout code
-        if: env.HAS_FUNDED_KEY == 'true'
+        if: steps.key.outputs.present == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install uv
-        if: env.HAS_FUNDED_KEY == 'true'
+        if: steps.key.outputs.present == 'true'
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
+          version: "0.13.7"
           python-version: "3.12"
 
       - name: Install dependencies
-        if: env.HAS_FUNDED_KEY == 'true'
+        if: steps.key.outputs.present == 'true'
         run: uv sync --frozen
 
-      # The key is visible to this step only, not to the dependency installation above.
-      # UV_FROZEN makes `uv run` use uv.lock without resolving. The environment already
-      # matches uv.lock after the step above, so nothing is resolved or installed while
-      # the key is present.
+      # The uv release and the packages are fixed before the key is present: setup-uv installs the pinned uv, and
+      # the step above installs the packages from uv.lock. The key is visible to this step only. UV_FROZEN makes
+      # `uv run` use uv.lock without resolving, and UV_NO_SYNC makes it skip syncing the environment, so nothing is
+      # resolved, downloaded or installed while the key is present.
       - name: Run the examples
-        if: env.HAS_FUNDED_KEY == 'true'
+        if: steps.key.outputs.present == 'true'
         env:
           SUPRA_EXAMPLES_PRIVATE_KEY: ${{ secrets.SUPRA_EXAMPLES_PRIVATE_KEY }}
           UV_FROZEN: "1"
+          UV_NO_SYNC: "1"
         run: make examples

@@ -50,7 +50,7 @@ EXAMPLES = automation faucet fee_payer_transfer_coin hello_blockchain multisig \
 	transfer_coin transfer_two_by_two your_coin
 
 examples:
-	@if [ -z "$(SUPRA_RPC_NODE_URL)" ]; then \
+	@if [ -z "$(strip $(SUPRA_RPC_NODE_URL))" ]; then \
 		echo "Set SUPRA_RPC_NODE_URL to the node to run the examples against (see examples/README.md)"; \
 		exit 1; \
 	fi

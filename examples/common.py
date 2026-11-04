@@ -49,8 +49,12 @@ QUANTS_PER_SUPRA = 10**8
 DEFAULT_FUNDING_QUANTS = 10 * QUANTS_PER_SUPRA
 
 # Gas units reserved for each funding transfer when checking the funding account's
-# balance. The SDK's max gas estimate is at least 1,500 units, and the node accepts a
-# transfer only if the balance covers the amount plus the max gas at the gas price.
+# balance. The node accepts a transfer only if the balance covers the amount plus the
+# max gas at the gas price, and the SDK sets the max gas to 1.5 times the gas the
+# simulated transfer uses, with no upper bound. A transfer to a new account uses about
+# 1,000 units on Devnet today, so the estimate is about 1,500 to 1,600 units; the
+# reserve covers an estimate of up to 2,000. The check is made before sending, and a
+# transfer can still fail if the gas it uses rises.
 FUNDING_TRANSFER_GAS_UNITS = 2_000
 
 # Pauses before the second to fifth faucet request, sent while the faucet answers
@@ -141,17 +145,34 @@ async def _fund_from_faucet(supra_client: SupraClient, address: AccountAddress) 
         supra_client if FAUCET_URL == RPC_NODE_URL else SupraClient(FAUCET_URL)
     )
     try:
+        faucet_tx_hash = None
         for pause in (*FAUCET_RETRY_PAUSES_SECONDS, None):
             try:
-                await faucet_client.faucet(address)
-                break
-            # A "TryLater" answer raises FaucetRequestNotAcceptedError. SDK versions
-            # that do not handle "TryLater" raise AttributeError for it instead.
+                faucet_tx_hash = await faucet_client.faucet(
+                    address, wait_for_faucet=False
+                )
+            # SDK versions that do not handle a "TryLater" body raise AttributeError
+            # from the request for it. Nothing else in this call is caught.
             except (FaucetRequestNotAcceptedError, AttributeError):
-                if pause is None:
-                    raise
-                print(f"The faucet answered TryLater; requesting again in {pause:g} s")
-                await asyncio.sleep(pause)
+                faucet_tx_hash = None
+            if faucet_tx_hash:
+                break
+            # The faucet answered "TryLater" (the request returned no hash).
+            if pause is None:
+                break
+            print(f"The faucet answered TryLater; requesting again in {pause:g} s")
+            await asyncio.sleep(pause)
+
+        if not faucet_tx_hash:
+            raise FaucetRequestNotAcceptedError
+
+        # The request was accepted; wait for its transaction once, outside the retry.
+        faucet_data = await faucet_client.wait_for_faucet(faucet_tx_hash)
+        if faucet_data.get("status") != "Success":
+            raise RuntimeError(
+                f"The faucet transaction {faucet_tx_hash} ended with status "
+                f"{faucet_data.get('status')}"
+            )
     finally:
         if faucet_client is not supra_client:
             await faucet_client.close()
