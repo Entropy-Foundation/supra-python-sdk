@@ -15,6 +15,7 @@ class AuthKeyScheme:
     MultiEd25519: bytes = b"\x01"
     SingleKey: bytes = b"\x02"
     MultiKey: bytes = b"\x03"
+    DeriveObjectAddressFromUserObject: bytes = b"\xfc"
     DeriveObjectAddressFromGuid: bytes = b"\xfd"
     DeriveObjectAddressFromSeed: bytes = b"\xfe"
     DeriveResourceAccountAddress: bytes = b"\xff"
@@ -241,6 +242,21 @@ class AccountAddress:
         return AccountAddress(hasher.digest())
 
     @staticmethod
+    def for_user_derived_object(
+        owner: AccountAddress, from_object: AccountAddress
+    ) -> AccountAddress:
+        """Derives the address `0x1::object::create_user_derived_object_address(owner, from_object)` returns.
+
+        The primary fungible store of an account is the object derived from the account and the fungible asset's
+        metadata object this way.
+        """
+        hasher = hashlib.sha3_256()
+        hasher.update(owner.address)
+        hasher.update(from_object.address)
+        hasher.update(AuthKeyScheme.DeriveObjectAddressFromUserObject)
+        return AccountAddress(hasher.digest())
+
+    @staticmethod
     def for_named_token(
         creator: AccountAddress, collection_name: str, token_name: str
     ) -> AccountAddress:
@@ -262,3 +278,25 @@ class AccountAddress:
 
     def serialize(self, serializer: Serializer):
         serializer.fixed_bytes(self.address)
+
+
+def to_account_address(value: AccountAddress | str, name: str) -> AccountAddress:
+    """Returns `value` as an `AccountAddress`.
+
+    Args:
+        value (AccountAddress | str): An `AccountAddress`, or a hex string accepted by
+            `AccountAddress.from_str_relaxed`.
+        name (str): Name of the parameter, used in the error message.
+
+    Raises:
+        ValueError: If `value` is not a valid account address.
+
+    """
+    if isinstance(value, AccountAddress):
+        return value
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be an AccountAddress or a hex string")
+    try:
+        return AccountAddress.from_str_relaxed(value)
+    except (RuntimeError, ValueError) as e:
+        raise ValueError(f"{name} is not a valid account address: {value!r}") from e

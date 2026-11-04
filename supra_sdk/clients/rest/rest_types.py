@@ -8,7 +8,7 @@ from enum import Enum
 from typing import Any
 from urllib.parse import quote
 
-from supra_sdk.account_address import AccountAddress
+from supra_sdk.account_address import AccountAddress, to_account_address
 
 RPC_API_PREFIX = "rpc/v3"
 
@@ -48,14 +48,7 @@ def address_segment(value: AccountAddress | str, name: str = "address") -> str:
         ValueError: If `value` is not a valid account address.
 
     """
-    if isinstance(value, AccountAddress):
-        return str(value)
-    if not isinstance(value, str):
-        raise ValueError(f"{name} must be an AccountAddress or a hex string")
-    try:
-        return str(AccountAddress.from_str_relaxed(value))
-    except (RuntimeError, ValueError) as e:
-        raise ValueError(f"{name} is not a valid account address: {value!r}") from e
+    return str(to_account_address(value, name))
 
 
 def hash_segment(value: str, name: str = "hash") -> str:
@@ -155,6 +148,9 @@ ACCOUNT_TRANSACTIONS_ENDPOINT = (
 )
 ACCOUNT_COIN_TRANSACTIONS_ENDPOINT = (
     f"{RPC_API_PREFIX}/accounts/{{account_address}}/coin_transactions"
+)
+ACCOUNT_FA_TRANSACTIONS_ENDPOINT = (
+    f"{RPC_API_PREFIX}/accounts/{{account_address}}/fa_transactions"
 )
 ACCOUNT_AUTOMATED_TRANSACTIONS_ENDPOINT = (
     f"{RPC_API_PREFIX}/accounts/{{account_address}}/automated_transactions"
@@ -341,15 +337,21 @@ class TransactionType(str, Enum):
     """Enumeration of transaction types.
 
     This enum represents the type of a transaction and it will be used when querying transactions
-    with block info via `BLOCK_BY_HEIGHT_ENDPOINT`.
+    with block info via `BLOCK_BY_HEIGHT_ENDPOINT`, and as the `type` filter of the account transaction
+    endpoints (`coin_transactions`, `fa_transactions`), whose accepted values are these members.
 
     Attributes:
         AUTO (str): Represents transactions associated with the Supra Automation.
         USER (str): Represents a user transaction type.
         META (str): Represents a metadata transaction type.
+        RECORD (str): Represents automation registry records.
+        SETTLEMENT (str): Represents cross-VM settlement transactions. Accepted by v12 nodes only; a v11.7.x node
+            rejects it as an unknown `type`.
 
     """
 
     AUTO = "auto"
     USER = "user"
     META = "meta"
+    RECORD = "record"
+    SETTLEMENT = "settlement"
