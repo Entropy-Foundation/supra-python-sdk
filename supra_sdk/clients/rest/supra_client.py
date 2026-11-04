@@ -769,6 +769,8 @@ class SupraClient(
         secondary_accounts: list[Account],
         transaction_payload: TransactionPayload,
         max_gas_amount: int | None = None,
+        *,
+        sequence_number: int | None = None,
     ) -> SignedTransaction:
         """Creates a fee-payer authenticator type signed transaction.
 
@@ -786,9 +788,18 @@ class SupraClient(
             transaction_payload (TransactionPayload): The transaction payload.
             max_gas_amount (int | None): Max gas units for this transaction. `None` uses the config value or the
                 estimate. Default to None.
+            sequence_number (int | None): The sender's sequence number, keyword-only. `None` reads it from the node,
+                which fails for a sender that has no account. Any integer, including 0, is used as given without a
+                request. Pass 0 for a sender with no account: a node from `supra_node_v12.0.0` (Devnet runs it)
+                accepts a fee-payer transaction with sequence number 0 from such a sender. On a v11.7.x node this
+                method still builds and returns the signed transaction, and the node refuses its submission (HTTP
+                400, "Transaction validation failed: Failed to read the AccountResource"). A new sender holds no
+                SUPRA, so a payload that spends from the sender's balance aborts; a payload that spends nothing
+                (for example `0x1::supra_account::set_allow_direct_coin_transfers` or a `create_account`-style call)
+                works. Default to None.
 
         Returns:
-            SignedTransaction: The constructed multi-agent authenticator type signed transaction.
+            SignedTransaction: The constructed fee-payer authenticator type signed transaction.
 
         Raises:
             MaxGasEstimationError: If the max gas amount has to be estimated and that fails.
@@ -798,7 +809,7 @@ class SupraClient(
         raw_transaction = await self._build_raw_transaction(
             sender,
             transaction_payload,
-            None,
+            sequence_number,
             max_gas_amount,
             to_signed,
             fee_payer.address(),
@@ -811,6 +822,8 @@ class SupraClient(
         secondary_accounts: list[Account],
         transaction_payload: TransactionPayload,
         max_gas_amount: int | None = None,
+        *,
+        sequence_number: int | None = None,
     ) -> SignedTransaction:
         """Creates a multi-agent authenticator type signed transaction.
 
@@ -827,6 +840,10 @@ class SupraClient(
             transaction_payload (TransactionPayload): The transaction payload.
             max_gas_amount (int | None): Max gas units for this transaction. `None` uses the config value or the
                 estimate. Default to None.
+            sequence_number (int | None): The sender's sequence number, keyword-only. `None` reads it from the node;
+                any integer, including 0, is used as given without a request. This skips the account read for a
+                sender that has an account. A sender with no account cannot send a multi-agent transaction on any
+                node; use `create_fee_payer_transaction` for that. Default to None.
 
         Returns:
             SignedTransaction: The constructed multi-agent authenticator type signed transaction.
@@ -837,7 +854,7 @@ class SupraClient(
         """
         to_signed = _multi_agent_signer(sender, secondary_accounts)
         raw_transaction = await self._build_raw_transaction(
-            sender, transaction_payload, None, max_gas_amount, to_signed
+            sender, transaction_payload, sequence_number, max_gas_amount, to_signed
         )
         return to_signed(raw_transaction)
 
