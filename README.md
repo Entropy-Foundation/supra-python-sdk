@@ -102,7 +102,8 @@ Which method lists them depends on where the account holds SUPRA:
   field names the fungible store, not the account, and no `0x1::coin` events.
 
 ```python
-entries, cursor = await client.account_history(address, categories=["fa"])
+history = await client.account_history(address, categories=["fa"])
+print(history.entries, history.cursor, history.indexed_from, history.oldest_block)
 async for entry in client.iter_account_history(address, categories=["sent", "fa"]):
     print(entry["categories"], entry["transaction"]["hash"])
 async for transaction in client.iter_account_fa_transactions(address):
