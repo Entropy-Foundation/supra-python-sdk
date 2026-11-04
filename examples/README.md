@@ -45,7 +45,7 @@ per transfer at the node's minimum gas price, and otherwise stops with the short
 The Devnet faucet limits the requests from one IP address, so running more than one example against Devnet needs
 `SUPRA_EXAMPLES_PRIVATE_KEY`. A localnet faucet has no such limit. Each generated account receives 10 SUPRA
 (`multisig.py`: 30 SUPRA for each account that sends transactions, 1 SUPRA for each signer); a full run of
-`make examples` takes about 315 SUPRA from the funding account, most of it left in the generated accounts.
+`make examples` takes about 325 SUPRA from the funding account, most of it left in the generated accounts.
 
 Two runs that use the same `SUPRA_EXAMPLES_PRIVATE_KEY` at the same time send transactions from the same account and
 race for its sequence numbers, so their funding transfers can fail. Run one at a time per key.
@@ -89,6 +89,7 @@ status `Success`.
 | [`automation.py`](./automation.py) | Registering an automation task and stopping it |
 | [`faucet.py`](./faucet.py) | One faucet request, sent without waiting, then waiting for the faucet transaction |
 | [`fee_payer_transfer_coin.py`](./fee_payer_transfer_coin.py) | A coin transfer whose gas a sponsor pays, simulated and then submitted |
+| [`fungible_asset.py`](./fungible_asset.py) | Reading a SUPRA balance as a fungible asset, migrating a `CoinStore` balance when the fungible balance is 0, a fungible asset transfer, and walking the receiver's fungible store transactions |
 | [`hello_blockchain.py`](./hello_blockchain.py) | Publishing the `hello_blockchain` package and calling its entry function; `python -m examples.hello_blockchain <address>` uses a package already published at `<address>` |
 | [`multisig.py`](./multisig.py) | A 2-of-3 MultiEd25519 account: a transfer, rotating an account's key to the multisig key, publishing and upgrading the `upgrade_and_govern` package, and a Move script; `python -m examples.multisig true` pauses between the steps |
 | [`rotate_key.py`](./rotate_key.py) | Rotating an account's authentication key to another Ed25519 key, then to a MultiEd25519 key |

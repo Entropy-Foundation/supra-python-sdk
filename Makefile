@@ -45,7 +45,7 @@ ci: lint fmt-check typecheck test-unit test-spec test-coverage build audit
 # SUPRA_RPC_NODE_URL set; see examples/README.md for the other variables. For example:
 #   SUPRA_RPC_NODE_URL=http://localhost:27001 make examples
 #   SUPRA_RPC_NODE_URL=https://rpc-devnet.supra.com SUPRA_EXAMPLES_PRIVATE_KEY=<key> make examples
-EXAMPLES = automation faucet fee_payer_transfer_coin hello_blockchain multisig \
+EXAMPLES = automation faucet fee_payer_transfer_coin fungible_asset hello_blockchain multisig \
 	rotate_key simple_nft simple_supra_token simulate_transfer_coin supra_token \
 	transfer_coin transfer_two_by_two your_coin
 
