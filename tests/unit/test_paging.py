@@ -375,6 +375,57 @@ class IteratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.node.params(0), {"start": "7", "ascending": "true"})
         self.assertEqual(self.node.params(1), {"start": "8", "ascending": "true"})
 
+    async def test_fa_transactions_iterator_ends_on_the_v12_missing_header(self):
+        pages = {None: page([1, 2], "100"), "100": page([3], None)}
+        self.node = await FakeNode.create(
+            lambda request: pages[request.url.params.get("start")]
+        )
+        items = await collect(
+            self.node.client.iter_account_fa_transactions(
+                ADDRESS, PaginationWithOrder(count=2)
+            )
+        )
+        self.assertEqual(items, [1, 2, 3])
+        self.assertEqual(len(self.node.requests), 2)
+        self.assertEqual(self.node.params(0), {"count": "2"})
+        self.assertEqual(self.node.params(1), {"count": "2", "start": "100"})
+        for request in self.node.requests:
+            self.assertTrue(request.url.path.endswith("/fa_transactions"))
+
+    async def test_fa_transactions_iterator_continues_past_an_empty_filtered_page(
+        self,
+    ):
+        pages = {
+            None: page([1], "100"),
+            "100": page([], "90"),
+            "90": page([2], "80"),
+            "80": page([], "0"),
+        }
+        self.node = await FakeNode.create(
+            lambda request: pages[request.url.params.get("start")]
+        )
+        items = await collect(
+            self.node.client.iter_account_fa_transactions(
+                ADDRESS, None, "0xa", TransactionType.USER
+            )
+        )
+        self.assertEqual(items, [1, 2])
+        self.assertEqual(len(self.node.requests), 4)
+        for index in range(4):
+            self.assertEqual(self.node.params(index)["type"], "user")
+
+    async def test_fa_transactions_iterator_queries_the_given_store(self):
+        self.node = await FakeNode.create(lambda _: page([1], None))
+        await collect(
+            self.node.client.iter_account_fa_transactions(
+                ADDRESS, store_address="0xabc"
+            )
+        )
+        self.assertEqual(
+            self.node.requests[0].url.path,
+            f"/rpc/v3/accounts/{AccountAddress.from_str_relaxed('0xabc')}/fa_transactions",
+        )
+
     async def test_automated_transactions_pass_the_cursor_back(self):
         pages = {
             None: page([1, 2], "k1"),

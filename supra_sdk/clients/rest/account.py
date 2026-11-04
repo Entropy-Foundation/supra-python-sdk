@@ -5,8 +5,6 @@ from collections.abc import AsyncIterator, Iterable
 from dataclasses import replace
 from typing import Any
 
-import httpx
-
 from supra_sdk.account_address import AccountAddress
 from supra_sdk.clients.rest.paging import next_cursor, paginate
 from supra_sdk.clients.rest.rest_client import RestClient
@@ -32,41 +30,6 @@ from supra_sdk.fungible_asset import (
     SUPRA_FA_METADATA_ADDRESS,
     primary_store_address,
 )
-
-
-def _next_cursor(
-    response: httpx.Response,
-    page: list[Any],
-    *,
-    sent: Any = None,
-    zero_continues: bool = False,
-) -> str | None:
-    """The cursor of the next page of `fa_transactions`, or `None` when the response ends the feed. The rule is
-    stated at `AccountRestClient.account_fa_transactions`.
-
-    Args:
-        response (httpx.Response): Response of a paged request.
-        page (list[Any]): The items of the page the response carried.
-        sent (Any): The cursor the request was sent with, or `None` when it carried none. An empty string counts as
-            none. Default to None.
-        zero_continues (bool): True when the request had no cursor, was ascending and carried a `type` filter.
-            Default to False.
-
-    Returns:
-        str | None: The cursor to pass back to read the next page, or `None` when the feed has ended.
-
-    """
-    cursor = response.headers.get("x-supra-cursor", "")
-    if not cursor.strip():
-        return None
-    if page:
-        return cursor
-    if cursor == "0" and zero_continues:
-        return cursor
-    sent_cursor = None if sent is None or sent == "" else str(sent)
-    if cursor == "0" or cursor == sent_cursor:
-        return None
-    return cursor
 
 
 class AccountRestClient(RestClient):
@@ -268,8 +231,8 @@ class AccountRestClient(RestClient):
         """Retrieves details of finalized coin deposit/withdraw type transactions associated with a given account.
 
         It lists movements of the account's `CoinStore` only. It does not list SUPRA held in primary fungible stores,
-        which is how accounts hold SUPRA on Devnet, and on Testnet and Mainnet once the features that hold SUPRA in
-        primary stores (64 and 65) are enabled. Use `account_fa_transactions` for those.
+        which is how accounts hold SUPRA on Devnet, and on Testnet and Mainnet once a feature that holds SUPRA in
+        primary stores (64 or 65) is enabled. Use `account_fa_transactions` for those.
 
         Args:
             account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.
@@ -447,8 +410,54 @@ class AccountRestClient(RestClient):
             and pagination.ascending is True
             and transaction_type is not None
         )
-        return page, _next_cursor(
+        return page, next_cursor(
             response, page, sent=sent, zero_continues=zero_continues
+        )
+
+    def iter_account_fa_transactions(
+        self,
+        account_address: AccountAddress | str,
+        pagination: PaginationWithOrder | None = None,
+        metadata_address: AccountAddress | str = SUPRA_FA_METADATA_ADDRESS,
+        transaction_type: TransactionType | str | None = None,
+        *,
+        store_address: AccountAddress | str | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Iterates over all transactions of an account's fungible store, requesting further pages until the feed
+        ends.
+
+        The iteration ends when the node sends no next cursor or repeats one (see
+        `supra_sdk.clients.rest.paging.next_cursor`). An empty page with a new cursor does not end it.
+
+        Args:
+            account_address (AccountAddress | str): Address of the account that owns the store, as an
+                `AccountAddress` or a hex string.
+            pagination (PaginationWithOrder | None): Pagination options of the first request; `count` sets the page
+                size, `start` the cursor to begin from and `ascending` the order. Default to None.
+            metadata_address (AccountAddress | str): Address of the fungible asset's metadata object. Default to
+                `SUPRA_FA_METADATA_ADDRESS` (`0xa`).
+            transaction_type (TransactionType | str | None): Keeps only transactions of this type, as for
+                `account_fa_transactions`; `settlement` needs a v12 node. Default to None, which keeps every type.
+            store_address (AccountAddress | str | None): Address of a fungible store to query instead of the primary
+                store derived from `account_address` and `metadata_address`. Default to None.
+
+        Returns:
+            AsyncIterator[dict[str, Any]]: The transactions, in the requested order.
+
+        Raises:
+            ValueError: If an address is not a valid account address; raised when the iteration starts.
+
+        """
+        return paginate(
+            lambda p: self.account_fa_transactions(
+                account_address,
+                p,
+                metadata_address,
+                transaction_type,
+                store_address=store_address,
+            ),
+            pagination or PaginationWithOrder(),
+            lambda p, cursor: replace(p, start=cursor),
         )
 
     async def account_automated_transactions(

@@ -38,6 +38,7 @@ Accounts that still hold a `CoinStore` balance keep it there until they migrate 
   `None` at the end of the feed on v11.7.x and v12 nodes (the method reads a v11.7.x node's `"0"` on an empty page as
   the end). Stop when the cursor is `None`, not on an empty page or on `"0"`: a page filtered by `transaction_type`
   can be empty and still carry a cursor to continue from, and `"0"` can be the position of a genesis row.
+  `iter_account_fa_transactions` takes the same arguments and follows the cursor until the feed ends.
 
 ```python
 balance = await client.account_fa_balance(alice.address())
@@ -70,6 +71,8 @@ Which method lists them depends on where the account holds SUPRA:
 entries, cursor = await client.account_history(address, categories=["fa"])
 async for entry in client.iter_account_history(address, categories=["sent", "fa"]):
     print(entry["categories"], entry["transaction"]["hash"])
+async for transaction in client.iter_account_fa_transactions(address):
+    print(transaction["hash"])
 ```
 
 ## Contributing
