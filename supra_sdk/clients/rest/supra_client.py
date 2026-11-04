@@ -11,7 +11,7 @@ from http import HTTPStatus
 from typing import Any
 
 from supra_sdk.account import Account
-from supra_sdk.account_address import AccountAddress
+from supra_sdk.account_address import AccountAddress, to_account_address
 from supra_sdk.authenticator import (
     Authenticator,
     FeePayerAuthenticator,
@@ -34,6 +34,10 @@ from supra_sdk.clients.rest.transaction_defaults import (
     default_expiration_timestamp,
     is_sequence_number_too_new,
     max_gas_from_simulation,
+)
+from supra_sdk.fungible_asset import (
+    FUNGIBLE_ASSET_METADATA_TYPE,
+    SUPRA_FA_METADATA_ADDRESS,
 )
 from supra_sdk.transactions import (
     AutomationRegistrationParams,
@@ -272,6 +276,12 @@ class SupraClient(
     async def account_supra_balance(self, account_address: AccountAddress) -> int:
         """Provides the Supra coin balance associated with the given account.
 
+        This reads `0x1::coin::balance<SupraCoin>`, which is the sum of the account's `CoinStore` balance and the
+        balance of its primary store of the paired fungible asset (SUPRA as a fungible asset, `0xa`), whichever form
+        the SUPRA is held in. The sum includes the fungible asset balance only while the node's framework has the
+        coin-to-fungible-asset migration feature enabled and the coin has a paired fungible asset. It does not say
+        which form holds the SUPRA: `account_fa_balance` reads the fungible store alone.
+
         Args:
             account_address (AccountAddress): Address of the account.
 
@@ -290,6 +300,10 @@ class SupraClient(
     ) -> int:
         """Provides the given `coin_type` coin balance associated with the given account.
 
+        This reads `0x1::coin::balance<coin_type>`: the account's `CoinStore` balance plus, for a coin that has a
+        paired fungible asset (SUPRA does), the balance of the account's primary store of that fungible asset. See
+        `account_supra_balance`.
+
         Args:
             account_address (AccountAddress): Address of the account.
             coin_type (str): The type of the coin for which balance needs to be provided.
@@ -300,6 +314,41 @@ class SupraClient(
         """
         response = await self.view(
             "0x1::coin::balance", [coin_type], [str(account_address)]
+        )
+        return int(response[0])
+
+    async def account_fa_balance(
+        self,
+        account_address: AccountAddress | str,
+        metadata_address: AccountAddress | str = SUPRA_FA_METADATA_ADDRESS,
+    ) -> int:
+        """Provides the balance of the account's primary fungible store for a fungible asset.
+
+        This reads `0x1::primary_fungible_store::balance`, the fungible store alone. SUPRA that the account still
+        holds in a `CoinStore` is not part of it, and an account with no primary store has a balance of 0. SUPRA is
+        held as a fungible asset from genesis on a Devnet that was created that way (faucet funds land in the primary
+        store), while an account that still holds a `CoinStore` balance keeps it there until it migrates with
+        `migrate_coin_to_fungible_store`. `account_supra_balance` reads the sum of both forms.
+
+        Args:
+            account_address (AccountAddress | str): Address of the account, as an `AccountAddress` or a hex string.
+            metadata_address (AccountAddress | str): Address of the fungible asset's metadata object. Default to
+                `SUPRA_FA_METADATA_ADDRESS` (`0xa`, SUPRA).
+
+        Returns:
+            int: The balance of the account's primary store, in the asset's smallest unit (quants for SUPRA).
+
+        Raises:
+            ValueError: If an address is not a valid account address.
+
+        """
+        response = await self.view(
+            "0x1::primary_fungible_store::balance",
+            [FUNGIBLE_ASSET_METADATA_TYPE],
+            [
+                str(to_account_address(account_address, "account_address")),
+                str(to_account_address(metadata_address, "metadata_address")),
+            ],
         )
         return int(response[0])
 
@@ -720,6 +769,8 @@ class SupraClient(
         secondary_accounts: list[Account],
         transaction_payload: TransactionPayload,
         max_gas_amount: int | None = None,
+        *,
+        sequence_number: int | None = None,
     ) -> SignedTransaction:
         """Creates a fee-payer authenticator type signed transaction.
 
@@ -737,9 +788,18 @@ class SupraClient(
             transaction_payload (TransactionPayload): The transaction payload.
             max_gas_amount (int | None): Max gas units for this transaction. `None` uses the config value or the
                 estimate. Default to None.
+            sequence_number (int | None): The sender's sequence number, keyword-only. `None` reads it from the node,
+                which fails for a sender that has no account. Any integer, including 0, is used as given without a
+                request. Pass 0 for a sender with no account: a node from `supra_node_v12.0.0` (Devnet runs it)
+                accepts a fee-payer transaction with sequence number 0 from such a sender. On a v11.7.x node this
+                method still builds and returns the signed transaction, and the node refuses its submission (HTTP
+                400, "Transaction validation failed: Failed to read the AccountResource"). A new sender holds no
+                SUPRA, so a payload that spends from the sender's balance aborts; a payload that spends nothing
+                (for example `0x1::supra_account::set_allow_direct_coin_transfers` or a `create_account`-style call)
+                works. Default to None.
 
         Returns:
-            SignedTransaction: The constructed multi-agent authenticator type signed transaction.
+            SignedTransaction: The constructed fee-payer authenticator type signed transaction.
 
         Raises:
             MaxGasEstimationError: If the max gas amount has to be estimated and that fails.
@@ -749,7 +809,7 @@ class SupraClient(
         raw_transaction = await self._build_raw_transaction(
             sender,
             transaction_payload,
-            None,
+            sequence_number,
             max_gas_amount,
             to_signed,
             fee_payer.address(),
@@ -762,6 +822,8 @@ class SupraClient(
         secondary_accounts: list[Account],
         transaction_payload: TransactionPayload,
         max_gas_amount: int | None = None,
+        *,
+        sequence_number: int | None = None,
     ) -> SignedTransaction:
         """Creates a multi-agent authenticator type signed transaction.
 
@@ -778,6 +840,10 @@ class SupraClient(
             transaction_payload (TransactionPayload): The transaction payload.
             max_gas_amount (int | None): Max gas units for this transaction. `None` uses the config value or the
                 estimate. Default to None.
+            sequence_number (int | None): The sender's sequence number, keyword-only. `None` reads it from the node;
+                any integer, including 0, is used as given without a request. This skips the account read for a
+                sender that has an account. A sender with no account cannot send a multi-agent transaction on any
+                node; use `create_fee_payer_transaction` for that. Default to None.
 
         Returns:
             SignedTransaction: The constructed multi-agent authenticator type signed transaction.
@@ -788,7 +854,7 @@ class SupraClient(
         """
         to_signed = _multi_agent_signer(sender, secondary_accounts)
         raw_transaction = await self._build_raw_transaction(
-            sender, transaction_payload, None, max_gas_amount, to_signed
+            sender, transaction_payload, sequence_number, max_gas_amount, to_signed
         )
         return to_signed(raw_transaction)
 
@@ -806,9 +872,9 @@ class SupraClient(
     ) -> str:
         """Registers Supra automation task.
 
-        With neither ``automation_task_type`` nor ``automation_priority`` the task is
-        registered with version 1 of the registration parameters. With either, version 2
-        is used, and a missing task type is ``AutomationTaskType.USER``.
+        Without ``automation_task_type`` the task is registered with version 1 of the
+        registration parameters; with one, version 2 is used. A priority applies to system tasks only: a priority without
+        ``AutomationTaskType.SYSTEM`` raises ``ValueError`` before anything is signed.
 
         Args:
             owner_account (Account): Account registering an automation task.
@@ -823,13 +889,16 @@ class SupraClient(
                 A ``SYSTEM`` task can only be registered by an account the registry has
                 authorised for system tasks; other accounts' registrations abort.
                 Defaults to version 1 parameters (a user task).
-            automation_priority (int | None): Priority of the task. Without a priority,
-                the registry uses the task's index as its priority.
+            automation_priority (int | None): Priority of a system task; allowed only
+                with ``automation_task_type=AutomationTaskType.SYSTEM``. A user task has
+                no priority: the registry uses the task's index as its priority.
 
         Returns:
             str: Transaction hash.
 
         Raises:
+            ValueError: If ``automation_priority`` is given without
+                ``AutomationTaskType.SYSTEM``, or is outside the range of a ``u64``.
             TransactionFailedError: If waiting is enabled and the final status is not `Success`.
             TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
 
@@ -1012,6 +1081,132 @@ class SupraClient(
             "transfer_coins",
             [TypeTag(StructTag.from_str(coin_type))],
             transaction_arguments,
+        )
+        signed_transaction = await self.create_signed_transaction(
+            sender,
+            TransactionPayload(transaction_payload),
+            sequence_number,
+            max_gas_amount,
+        )
+        return await self.submit_transaction(signed_transaction)
+
+    async def transfer_fungible_asset(
+        self,
+        sender: Account,
+        recipient: AccountAddress | str,
+        amount: int,
+        metadata_address: AccountAddress | str = SUPRA_FA_METADATA_ADDRESS,
+        sequence_number: int | None = None,
+        max_gas_amount: int | None = None,
+    ) -> str:
+        """Transfers a fungible asset from the sender's primary store to the recipient's primary store.
+
+        This method builds a `0x1::primary_fungible_store::transfer` payload, signs it with the sender's account, and
+        submits it to the network. The recipient's primary store is created when it does not exist.
+
+        Only the sender's fungible store is debited. SUPRA that the sender still holds in a `CoinStore` is not moved,
+        and the transaction aborts when the fungible store holds less than `amount`; without a `max_gas_amount` the
+        abort is reported by the gas estimation as a `MaxGasEstimationError`, and with one as a
+        `TransactionFailedError`. Check `account_fa_balance` first, call `migrate_coin_to_fungible_store` to move the
+        coin balance into the fungible store, or use `transfer_supra_coin`, which moves SUPRA held in either form.
+
+        Gas is paid in SUPRA whatever the asset, and the gas estimation described at `transfer_supra_coin` applies.
+
+        Args:
+            sender (Account): Sender account.
+            recipient (AccountAddress | str): Recipient account address, as an `AccountAddress` or a hex string.
+            amount (int): The amount to transfer, in the asset's smallest unit (quants for SUPRA).
+            metadata_address (AccountAddress | str): Address of the fungible asset's metadata object. Default to
+                `SUPRA_FA_METADATA_ADDRESS` (`0xa`, SUPRA).
+            sequence_number (int | None): The sender's sequence number. If not provided, it will be fetched
+                automatically. Default to None.
+            max_gas_amount (int | None): Max gas units for this transaction. `None` uses the config value or the
+                estimate. Default to None.
+
+        Returns:
+            str: Transaction hash.
+
+        Raises:
+            ValueError: If `recipient` or `metadata_address` is not a valid account address.
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
+
+        """
+        transaction_arguments = [
+            TransactionArgument(
+                to_account_address(metadata_address, "metadata_address"),
+                Serializer.struct,
+            ),
+            TransactionArgument(
+                to_account_address(recipient, "recipient"), Serializer.struct
+            ),
+            TransactionArgument(amount, Serializer.u64),
+        ]
+        transaction_payload = EntryFunction.natural(
+            "0x1::primary_fungible_store",
+            "transfer",
+            [TypeTag(StructTag.from_str(FUNGIBLE_ASSET_METADATA_TYPE))],
+            transaction_arguments,
+        )
+        signed_transaction = await self.create_signed_transaction(
+            sender,
+            TransactionPayload(transaction_payload),
+            sequence_number,
+            max_gas_amount,
+        )
+        return await self.submit_transaction(signed_transaction)
+
+    async def migrate_coin_to_fungible_store(
+        self,
+        sender: Account,
+        coin_type: str = "0x1::supra_coin::SupraCoin",
+        sequence_number: int | None = None,
+        max_gas_amount: int | None = None,
+    ) -> str:
+        """Moves the sender's balance of a coin type from its `CoinStore` to its primary fungible store.
+
+        This method builds a `0x1::coin::migrate_to_fungible_store` payload, signs it with the sender's account, and
+        submits it to the network. The `CoinStore` resource is removed, its balance is deposited in the primary store
+        of the coin's paired fungible asset (`0xa` for SUPRA), which is created if needed, and the account then
+        holds the coin as a fungible asset only. The sum that `account_supra_balance` reads does not change; the
+        balance that `account_fa_balance` reads becomes that sum.
+
+        Migration is meaningful only for accounts that still hold a `CoinStore` balance. On a Devnet whose SUPRA is
+        held as a fungible asset from genesis there is no `CoinStore` to move, and the transaction changes no balance
+        but still costs gas. The transaction aborts when the framework's coin-to-fungible-asset migration feature is
+        not enabled. The migration cannot be undone.
+
+        For a `coin_type` other than SUPRA, the framework (`0x1::coin::migrate_to_fungible_store`) creates the
+        paired fungible asset metadata object of the coin if none exists yet, and aborts when the coin type is not
+        initialized. For any coin type, including SUPRA, it creates the account's primary store of the paired fungible
+        asset if it does not exist, even when the account has no `CoinStore`; in that case no balance moves. For SUPRA
+        the paired fungible asset must already exist, as the framework does not create it here and aborts otherwise.
+
+        The framework of v11.7.x nodes also writes a `MigrationFlag` at the primary store, with or without a
+        `CoinStore`. The v12 framework writes none: an account's conversion shows as the absence of
+        `CoinStore<CoinType>` at the account, not as a `MigrationFlag`.
+
+        Args:
+            sender (Account): The account whose balance is migrated.
+            coin_type (str): The fully-qualified coin type tag. Default to '0x1::supra_coin::SupraCoin'.
+            sequence_number (int | None): The sender's sequence number. If not provided, it will be fetched
+                automatically. Default to None.
+            max_gas_amount (int | None): Max gas units for this transaction. `None` uses the config value or the
+                estimate. Default to None.
+
+        Returns:
+            str: Transaction hash.
+
+        Raises:
+            TransactionFailedError: If waiting is enabled and the final status is not `Success`.
+            TransactionWaitTimeoutReachedError: If waiting is enabled and the transaction is not final in time.
+
+        """
+        transaction_payload = EntryFunction.natural(
+            "0x1::coin",
+            "migrate_to_fungible_store",
+            [TypeTag(StructTag.from_str(coin_type))],
+            [],
         )
         signed_transaction = await self.create_signed_transaction(
             sender,
