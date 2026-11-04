@@ -227,6 +227,8 @@ class SupraClient(
         api_client_config = ApiClientConfig(
             http2=supra_client_config.http2,
             access_token=supra_client_config.access_token,
+            timeout=supra_client_config.timeout,
+            retry=supra_client_config.retry,
         )
         super().__init__(ApiClient(base_url, api_client_config))
 
@@ -440,7 +442,7 @@ class SupraClient(
         may still succeed later, e.g. because its sequence number is too new), a missing status or an unknown one.
         A 404 whose body is the node's "transaction not found" message (a JSON object with a `message` starting
         "Information not available for" or containing "Cannot find transaction") means "not seen yet" and polling
-        continues; any other 404, such as a wrong base URL or a missing route, is raised as `ApiError`. The final
+        continues; any other 404, such as a wrong base URL or a missing route, is raised as `ApiNotFoundError`. The final
         data is returned whatever the status is, so the caller must check `status`.
 
         The wait never starts a poll after `TransactionConfig.transaction_wait_time_in_seconds` has passed, bounds each
@@ -1292,16 +1294,24 @@ class SupraClient(
     ) -> str | None:
         """Requests faucet funds to be sent to the given account address.
 
+        The faucet does not accept the request when the node answers `"TryLater"` (no faucet account was free to fund
+        it); the request can be sent again later. The request is sent once, whatever `ApiClientConfig.retry` says.
+
         Args:
             address (AccountAddress | str): The target account address to receive funds, as an `AccountAddress` or a
                 hex string.
             wait_for_faucet (bool): Flag indicates whether wait for faucet should be done or not. Default to True.
 
         Returns:
-            str | None: Faucet transaction hash if faucet request is accepted else None.
+            str | None: The faucet transaction hash when the node answers `Accepted`; None when it answers
+                `"TryLater"` and `wait_for_faucet` is False.
 
         Raises:
-            FaucetRequestNotAcceptedError: If waiting is requested and the faucet did not accept the request.
+            FaucetRequestNotAcceptedError: If waiting is requested and the node answers `"TryLater"`.
+            ApiRateLimitError: If the address is inside the cooldown after its last grant or has reached the daily
+                number of grants (429).
+            UnexpectedResponseError: If the node answers 200 with a body that is neither `"TryLater"` nor a JSON
+                object whose `Accepted` is a non-empty string.
             TransactionFailedError: If waiting is requested and the final status of the faucet transaction is not
                 `Success`.
             TransactionWaitTimeoutReachedError: If waiting is requested and the faucet transaction is not final within
@@ -1358,8 +1368,8 @@ def _is_transaction_not_found(error: ApiError) -> bool:
     if error.status_code != HTTPStatus.NOT_FOUND:
         return False
     try:
-        message = json.loads(error.message).get("message")
-    except (ValueError, AttributeError):
+        message = json.loads(error.body).get("message")
+    except (ValueError, AttributeError, RecursionError):
         return False
     return isinstance(message, str) and any(
         fragment in message for fragment in _TRANSACTION_NOT_FOUND_MESSAGES

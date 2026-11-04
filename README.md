@@ -17,6 +17,40 @@ python -m pip install supra-sdk
 
 Check [examples](examples/README.md) section.
 
+### Errors, timeouts and retries
+
+A response with a status other than 200 raises `ApiError` (from `supra_sdk.clients`), whose `message` is the node's
+error message, `status_code` the HTTP status, `headers` the response headers and `body` the response body. These
+statuses raise a subclass of `ApiError`:
+
+| Status | Class | Extra attribute |
+|---|---|---|
+| 404 | `ApiNotFoundError` | |
+| 408 | `ApiRequestTimeoutError` | |
+| 410 | `ApiGoneError` | `oldest_block`, from the `x-supra-oldest-block` header |
+| 429 | `ApiRateLimitError` | `retry_after_seconds`, from the body or the `Retry-After` header |
+| 503 | `ApiServiceUnavailableError` | |
+
+`view()` raises `UnexpectedResponseError`, which is also a `KeyError`, when a 200 response is not a JSON object with
+the `result` field. `faucet()` returns `None` (or raises `FaucetRequestNotAcceptedError` while waiting) when the
+200 response is `"TryLater"`, and raises `UnexpectedResponseError` when the 200 body is not JSON or its `Accepted`
+field is missing, empty or not a string. A request that exceeds the timeout raises `ClientTimeoutError`,
+which is a `httpx.TimeoutException` and carries the request as `request`.
+
+Each phase of a request (connecting, waiting for a pooled connection, writing, reading) is limited to 60 seconds;
+`timeout` changes the limit. GET requests are repeated after a 408, 429 or 503 response or a timeout only when
+`retry` is set. POST requests and the faucet request are never repeated.
+
+```python
+from supra_sdk.clients import RetryPolicy
+from supra_sdk.clients.rest import SupraClient, SupraClientConfig
+
+client = SupraClient(
+    "https://rpc-testnet.supra.com",
+    SupraClientConfig(timeout=30, retry=RetryPolicy(attempts=3, max_delay_seconds=10)),
+)
+```
+
 ### SUPRA as a fungible asset
 
 SUPRA exists in two forms: a `CoinStore` balance and a balance in the account's primary fungible store (metadata

@@ -122,7 +122,7 @@ class BaseUrlTests(unittest.IsolatedAsyncioTestCase):
         await rec.close()
         self.assertIn(Metadata.SUPRA_HEADER, rec.last.headers)
         self.assertEqual(client.timeout.read, 60.0)
-        self.assertIsNone(client.timeout.pool)
+        self.assertEqual(client.timeout.pool, 60.0)
 
     async def test_post_keeps_path_prefix(self):
         rec = await RecordingClient.create("https://proxy.example/supra")

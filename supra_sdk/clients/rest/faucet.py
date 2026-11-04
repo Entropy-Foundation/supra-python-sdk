@@ -4,12 +4,16 @@
 from typing import Any
 
 from supra_sdk.account_address import AccountAddress
+from supra_sdk.clients.api_client import UnexpectedResponseError
 from supra_sdk.clients.rest.rest_client import RestClient
 from supra_sdk.clients.rest.rest_types import (
     FAUCET_ENDPOINT,
     FAUCET_TRANSACTION_ENDPOINT,
     format_endpoint,
 )
+
+# The body of a 200 faucet response when no faucet account is free to fund the request.
+_FAUCET_TRY_LATER = "TryLater"
 
 
 class FaucetRestClient(RestClient):
@@ -23,17 +27,42 @@ class FaucetRestClient(RestClient):
     async def faucet(self, address: AccountAddress | str) -> str | None:
         """Requests faucet funds to be sent to the given account address.
 
+        The node answers `{"Accepted": <hash>}` when it submitted a funding transaction and `"TryLater"` when no
+        faucet account was free to fund it; a `"TryLater"` answer does not count against the address. The request is
+        sent once, whatever `ApiClientConfig.retry` says, because each accepted request funds the account.
+
         Args:
             address (AccountAddress | str): The target account address to receive funds, as an `AccountAddress`
                 or a hex string.
 
         Returns:
-            str | None: Faucet transaction hash if faucet request is accepted else None.
+            str | None: The faucet transaction hash when the node answers `Accepted`, None when it answers
+                `"TryLater"`.
+
+        Raises:
+            ApiRateLimitError: If the address is inside the cooldown after its last grant or has reached the daily
+                number of grants (429).
+            ApiError: If the node answers with a status other than 200, for example 400 when the account's
+                SUPRA balance is at or above the faucet's cap.
+            UnexpectedResponseError: If the node answers 200 with a body that is neither `"TryLater"` nor a JSON
+                object whose `Accepted` is a non-empty string, including a body that is not JSON.
 
         """
         endpoint = format_endpoint(FAUCET_ENDPOINT, address=address)
-        res_data = (await self.api_client.get(endpoint=endpoint)).json()
-        return res_data.get("Accepted", None)
+        response = await self.api_client.get(endpoint=endpoint, retryable=False)
+        res_data = self._response_json(response, "Accepted")
+        if res_data == _FAUCET_TRY_LATER:
+            return None
+        if not isinstance(res_data, dict) or "Accepted" not in res_data:
+            raise UnexpectedResponseError("Accepted", response)
+        accepted = res_data["Accepted"]
+        if not isinstance(accepted, str) or not accepted:
+            raise UnexpectedResponseError(
+                "Accepted",
+                response,
+                "has an 'Accepted' field that is not a non-empty string",
+            )
+        return accepted
 
     async def faucet_transaction_by_hash(self, tx_hash: str) -> dict[str, Any]:
         """Retrieves details of a faucet transaction by its hash.

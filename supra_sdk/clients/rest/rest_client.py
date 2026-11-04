@@ -1,7 +1,12 @@
 # Copyright © Supra
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Any
+
+import httpx
+
 from supra_sdk.clients import ApiClient
+from supra_sdk.clients.api_client import UnexpectedResponseError
 
 
 class RestClient:
@@ -25,3 +30,33 @@ class RestClient:
 
         """
         self.api_client = api_client
+
+    @staticmethod
+    def _response_json(response: httpx.Response, field: str) -> Any:
+        """Returns the parsed JSON body of `response`, which is expected to hold `field`.
+
+        Raises:
+            UnexpectedResponseError: If the body is not JSON.
+
+        """
+        try:
+            return response.json()
+        except (ValueError, RecursionError):
+            raise UnexpectedResponseError(
+                field,
+                response,
+                f"does not have a JSON body, so it has no {field!r} field",
+            ) from None
+
+    @staticmethod
+    def _response_field(response: httpx.Response, field: str) -> Any:
+        """Returns `field` of the JSON object in the body of `response`.
+
+        Raises:
+            UnexpectedResponseError: If the body is not a JSON object with `field`.
+
+        """
+        data = RestClient._response_json(response, field)
+        if not isinstance(data, dict) or field not in data:
+            raise UnexpectedResponseError(field, response)
+        return data[field]
