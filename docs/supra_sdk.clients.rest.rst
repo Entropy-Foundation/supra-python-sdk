@@ -42,6 +42,14 @@ General
    :show-inheritance:
    :undoc-members:
 
+Paging
+-------------------------------------
+
+.. automodule:: supra_sdk.clients.rest.paging
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
 Rest Client
 -------------------------------------------
 
