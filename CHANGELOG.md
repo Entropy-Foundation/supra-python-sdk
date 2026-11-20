@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-11-04
+## [0.2.0] - 2026-11-21
 
 This release is tested against Supra node `supra_node_v11.7.2`, which runs on Mainnet and Testnet, and
 `supra_node_v12.0.0.rc7`, which runs on Devnet. The SDK calls `/rpc/v3` only. The README section "Compatibility" lists
@@ -38,7 +38,8 @@ says what to change.
   timeout.
 - **`ApiClientConfig.timeout`** and **`ApiClientConfig.retry`**, keyword-only, also on `SupraClientConfig`. `timeout`
   (default 60) limits each phase of a request, in seconds: connecting, waiting for a pooled connection, writing and
-  reading. A value that is not a finite number above 0 raises `ValueError`. `retry` takes a
+  reading. A value that is not a finite number above 0 makes the `ApiClient` or `SupraClient` constructor raise
+  `ValueError`; `ApiClientConfig` itself accepts it. `retry` takes a
   `RetryPolicy(attempts=3, max_delay_seconds=10.0, base_delay_seconds=0.25)`: a GET request is then repeated after a
   408, 429 or 503 response or a timeout, up to `attempts` requests in total, after the wait the response asks for or an
   exponential backoff. A response that asks for a wait longer than `max_delay_seconds` is raised at once. The default,
@@ -87,9 +88,11 @@ says what to change.
   `AutomationRegistrationParamsV2` (the version 1 fields, a task type and an optional priority) and
   `AutomationRegistrationParams.build(...)`, which returns version 1 without a task type and version 2 with one.
   `SupraClient.register_automation_task` takes `automation_task_type` and `automation_priority`; without a task type it
-  registers version 1 parameters, as 0.1.1 did. A priority is allowed only with `AutomationTaskType.SYSTEM`: with any
-  other task type or none, `build`, the `AutomationRegistrationParamsV2` constructor and `register_automation_task`
-  raise `ValueError` before anything is signed. A user task has no priority; the registry uses its index. Only
+  registers version 1 parameters, as 0.1.1 did. A priority is allowed only with `AutomationTaskType.SYSTEM`: with
+  `AutomationTaskType.USER` or no task type, `build` and `register_automation_task` raise `ValueError` before anything
+  is signed. The `AutomationRegistrationParamsV2` constructor raises `ValueError` for a priority with
+  `AutomationTaskType.USER`, and `TypeError` for a task type that is not an `AutomationTaskType`, including `None`. A
+  user task has no priority; the registry uses its index. Only
   accounts that the automation registry has authorised can register `SYSTEM` tasks.
   `AutomationRegistrationParamsV2.deserialize` also decodes a user task with a priority.
 - **`max_gas_amount`** argument on `create_raw_transaction`, `create_signed_transaction`,
@@ -113,7 +116,7 @@ says what to change.
   MultiKey `asymmetric_crypto_wrapper.MultiSignature` decode, so a `SignedTransaction` from a MultiEd25519 or MultiKey
   account round-trips through BCS. A MultiKey supports Ed25519 keys only; another key type raises `ValueError` when
   decoded. `MultiEd25519Authenticator.verify` verifies the signature; it raised `NotImplementedError`. The multi-key,
-  multi-signature and authenticator classes have `__eq__` and `__hash__`.
+  multi-signature classes, `MultiEd25519Authenticator` and `MultiKeyAuthenticator` have `__eq__` and `__hash__`.
 - **`py.typed`** — the package ships the PEP 561 marker, so type checkers read its annotations.
 - **`ApiClient(..., transport=...)`** takes an optional `httpx` transport, for example `httpx.MockTransport`.
 - Address parameters of the REST methods accept a hex string as well as an `AccountAddress`. Block heights and epochs
@@ -136,8 +139,10 @@ says what to change.
   `TransactionWaitTimeoutReachedError` with `last_status=None`. 0.1.1 raised `ApiError` with status 404 at once. Code
   that caught that `ApiError` catches `TransactionWaitTimeoutReachedError` and checks `last_status is None`. Other 404
   responses, such as one for a wrong base URL, still raise at once, as `ApiNotFoundError`. The first poll is sent
-  without a sleep before it, no poll starts after the deadline, each poll and sleep is bounded by the time remaining,
-  and `transaction_wait_time_in_seconds` and `polling_wait_time_in_seconds` accept fractional seconds. The message of
+  without a sleep before it, and is sent even when `transaction_wait_time_in_seconds` is 0 or less; it is then bounded
+  only by the request timeout and the `RetryPolicy`. After the first poll, no poll starts after the deadline and each
+  poll and sleep is bounded by the time remaining. `transaction_wait_time_in_seconds` and
+  `polling_wait_time_in_seconds` accept fractional seconds. The message of
   `TransactionWaitTimeoutReachedError` changed.
 - **Breaking:** `TransactionConfig.max_gas_amount` and `TransactionConfig.expiration_ttl` default to `None`; they were
   500,000 and 600. To keep 0.1.1's values, set `SupraClientConfig(max_gas_amount=500_000, expiration_ttl=600)`.
@@ -146,10 +151,12 @@ says what to change.
     units), and uses the gas used times 1.5, rounded up, at least 1,500 units and at most what the balance pays for.
     When the simulation reports the sequence number as ahead of the account's (a transaction sent behind uncommitted
     ones), the account's sequence number is read and the simulation is repeated with it; the transaction keeps its own
-    number. A sender given only as an address gets 20,000 units, capped by the balance. When the estimate cannot be
-    made (the balance cannot be read or pays for no gas, or the simulation does not succeed), `MaxGasEstimationError`
-    is raised, with `status`, `vm_status` and `simulation`, and nothing is submitted. Each transaction without an
-    explicit max gas makes a balance read and a simulation request.
+    number. Without a key to simulate with, that is when the sender is given only as an address, or when
+    `create_raw_transaction` is given the fee payer only as an address, the max gas is 20,000 units, capped by the
+    balance, and nothing is simulated. When the estimate cannot be made (the balance cannot be read or pays for no gas,
+    or the simulation does not succeed), `MaxGasEstimationError` is raised, with `status`, `vm_status` and
+    `simulation`, and nothing is submitted. Each transaction without an explicit max gas makes a balance read, and a
+    simulation request unless the 20,000-unit fallback applies.
   - Expiry: without an `expiration_ttl`, a transaction expires 5 seconds before the node's maximum time-to-live after
     the client's clock: 595 seconds where the maximum is 600, its value on every network. The first such transaction
     of a client reads the maximum from `GET /rpc/v3/transactions/parameters`.
@@ -164,13 +171,17 @@ says what to change.
   as the variant byte alone, the encoding the node accepts; 0.1.1 wrote the value after the variant byte. The `.value`
   attribute is removed, equality ignores any value passed, and `str()` gives the type name, for example `u64`. The
   constructors still accept one argument, ignore it and emit a `DeprecationWarning`; write `U64Tag()` instead of
-  `U64Tag(0)`. `TypeTag.deserialize` raises `ValueError` for an unknown variant (was `NotImplementedError`), and
+  `U64Tag(0)`; the argument is deprecated (see Deprecated). `TypeTag.deserialize` raises `ValueError` for an unknown variant (was `NotImplementedError`), and
   `StructTag.from_str` raises `ValueError` for malformed input or a type that is not a struct (0.1.1 raised whatever
   error the input led to, such as `IndexError`).
 - **Breaking:** `str()` of an `ApiError` keeps the form `{message: …, status_code: …}` and holds `ApiError.message`,
   the node's message when the JSON error body has one, where 0.1.1 held the whole response body; the body is
-  `ApiError.body`. A request that times out raises `ClientTimeoutError` instead of the `httpx` timeout class;
-  `except httpx.TimeoutException` still catches it. The wait for a pooled connection is limited by the timeout (60
+  `ApiError.body`. A request that times out raises `ClientTimeoutError` instead of the `httpx` timeout class.
+  `ClientTimeoutError` subclasses `httpx.TimeoutException` directly, so `except httpx.TimeoutException` still catches
+  it, and `except` clauses for `httpx.ConnectTimeout`, `httpx.ReadTimeout`, `httpx.WriteTimeout` or
+  `httpx.PoolTimeout` no longer do. Code that caught one of those catches `ClientTimeoutError` (or
+  `httpx.TimeoutException`) and reads `ClientTimeoutError.phase`, the name of the `httpx` class, to tell the phases
+  apart. The wait for a pooled connection is limited by the timeout (60
   seconds by default); in 0.1.1 it was unlimited.
 - **Breaking:** `view()` raises `UnexpectedResponseError` when a 200 response is not JSON or has no `result` field,
   where 0.1.1 raised `json.JSONDecodeError` (a `ValueError`) or `KeyError`. `UnexpectedResponseError` is a `KeyError`
@@ -178,18 +189,20 @@ says what to change.
 - **Breaking:** `faucet()` raises `UnexpectedResponseError` when a 200 body is neither `"TryLater"` nor a JSON object
   whose `Accepted` is a non-empty string, including a body that is not JSON. For such bodies 0.1.1 returned `None`,
   `""` or the value as it was with `wait_for_faucet=False`, raised `FaucetRequestNotAcceptedError` for a missing or
-  empty `Accepted` with `wait_for_faucet=True`, and raised `json.JSONDecodeError` for a body that is not JSON. Code
-  that caught those for these bodies catches `UnexpectedResponseError`.
+  empty `Accepted` with `wait_for_faucet=True`, raised `AttributeError` for a JSON body that is not an object (such as
+  `[]`, `null` or a number), and raised `json.JSONDecodeError` for a body that is not JSON. Code that caught those for
+  these bodies catches `UnexpectedResponseError`.
 - **Breaking:** path values are validated before a request is sent, and invalid ones raise `ValueError` where 0.1.1
   sent the request. Addresses and table handles must be account addresses (an `AccountAddress` or a hex string) and are
   sent in canonical form; transaction and block hashes must be 64 hex digits with an optional `0x`; heights and epochs
   must be non-negative integers or strings of decimal digits; other values, such as resource types, module names and
-  event types, must be non-empty strings. Each value is sent as one percent-encoded path segment, so a value containing
-  `/`, `?`, `#` or `%` stays in its segment. A base URL with a query string or a fragment raises `ValueError`; pass an
+  event types, must be non-empty strings other than `.` and `..`. Each value is sent as one percent-encoded path
+  segment, so a value containing `/`, `?`, `#` or `%` stays in its segment. A base URL with a query string or a fragment raises `ValueError`; pass an
   access token through `ApiClientConfig.access_token`. `ApiClient.base_url` always ends in `/`.
 - **Breaking:** both `MultiSignature` classes (`ed25519` and `asymmetric_crypto_wrapper`) sort their signatures by key
   index, the order in which the node pairs them with bitmap bits, so the order the caller supplies them in does not
-  matter and `.signatures` is sorted. The bytes of a MultiKey signature built from signatures out of index order change.
+  matter and `.signatures` is sorted. The bytes of a MultiEd25519 or MultiKey signature built from signatures out of
+  index order change, and so does the hash of its transaction.
   A `SignedTransaction` built from a MultiEd25519 `AccountAuthenticator` encodes its authenticator as the transaction
   authenticator `MultiEd25519` instead of `SingleSender`, so its bytes and hash change; one built from
   `Authenticator(MultiEd25519Authenticator(...))` is unchanged. The multi-key and multi-signature constructors raise
@@ -201,8 +214,7 @@ says what to change.
 - **Breaking:** `behave` and `types-six` are no longer runtime dependencies. The wheel requires `httpx[http2]`,
   `PyNaCl` and `typing-extensions`; a project that used `behave` or `types-six` through `supra-sdk` declares them
   itself. The `PyNaCl` lower bound is 1.6.2 (was 1.5.0).
-- `block_by_height` takes `with_finalized_transactions`, the node's parameter name, as its third parameter. The keyword
-  `with_finalized_transaction` is still accepted, keyword-only, and emits a `DeprecationWarning`.
+- `block_by_height` takes `with_finalized_transactions`, the node's parameter name, as its third parameter.
 - `ed25519.MultiPublicKey` and the MultiKey `asymmetric_crypto_wrapper.MultiPublicKey` accept a single key; the minimum
   was 2.
 - `TypeTag.from_str`, `StructTag.from_str` and `TypeTag.deserialize` raise `ValueError` for a type that nests `vector`
@@ -215,7 +227,20 @@ says what to change.
 - The examples in `examples/` default to Devnet (`https://rpc-devnet.supra.com`) and read `SUPRA_RPC_NODE_URL`,
   `SUPRA_FAUCET_URL` and an optional funded key, `SUPRA_EXAMPLES_PRIVATE_KEY`, from the environment. They publish Move
   packages from the precompiled `examples/move/packages.json` instead of running the `supra` CLI, and no longer use
-  `aiofiles`. `examples/README.md` describes them.
+  `aiofiles`. `examples/README.md` describes them. `examples/automation.py` registers its task with a max gas and an
+  epoch fee cap derived from a simulation of the automated function; 0.1.1's example used a max gas of 9, with which
+  the automated transaction runs out of gas.
+
+### Deprecated
+
+- The keyword `with_finalized_transaction` of `block_by_height`. It is still accepted, keyword-only, and emits a
+  `DeprecationWarning`; pass `with_finalized_transactions`.
+- Passing a value to the constructor of a primitive type tag (`BoolTag`, `U8Tag` to `U256Tag`,
+  `AccountAddressTag`). The value is ignored and a `DeprecationWarning` is emitted; write `U64Tag()`.
+
+### Removed
+
+- **Breaking:** `asymmetric_crypto_wrapper.index_to_bitmap_value`. `MultiSignature.serialize` builds the bitmap.
 
 ### Fixed
 
@@ -241,10 +266,6 @@ says what to change.
 - `SingleKeyAuthenticator.verify`, and `SignedTransaction.verify()` for a single-key sender, return `True` for a valid
   signature; 0.1.1 returned `False`.
 
-### Removed
-
-- **Breaking:** `asymmetric_crypto_wrapper.index_to_bitmap_value`. `MultiSignature.serialize` builds the bitmap.
-
 ### Security
 
 - **Breaking:** `str()` and `repr()` of an `ed25519.PrivateKey` return a redacted form, `PrivateKey(public_key=0x…)`,
@@ -252,7 +273,10 @@ says what to change.
   unchanged. Code that used `str(private_key)` or an f-string to export the key calls `private_key.hex()`.
 - `Account.store` writes the file with mode 0600, readable and writable by its owner only; in 0.1.1 the mode followed
   the umask. It writes a temporary file in the same directory and renames it over the path, so an existing file is
-  replaced and a failed write leaves it intact. On Windows the mode is not applied. The key is stored unencrypted, the
+  replaced and a failed write leaves it intact. Where `path` is a symbolic link, the link is replaced by a regular file
+  and its target is left unchanged; 0.1.1 wrote through the link to its target. A hard link at `path` no longer shares
+  the new contents. The directory must be writable also when the file already exists, where 0.1.1 needed only the file
+  to be writable. On Windows the mode is not applied. The key is stored unencrypted, the
   JSON format is unchanged, and `Account.load` reads files written by 0.1.1.
 
 ## [0.1.1] - 2026-02-10
@@ -262,7 +286,7 @@ says what to change.
 - **`TransactionConfig.gas_unit_price`** defaults to `None`, which uses the node's `min_configured_gas_price` from
   `GET /rpc/v3/transactions/estimate_gas_price` instead of 100.
 
-## [0.1.0] - 2025-09-19
+## [0.1.0] - 2025-10-27
 
 First release.
 
