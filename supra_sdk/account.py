@@ -66,9 +66,13 @@ class Account:
         file's mode or owner was. The replacement is atomic: the data is written
         to a temporary file in the same directory and renamed over `path`, so a
         crash or a full disk does not leave a partial or empty file, and a
-        failed write leaves any existing file intact. On Windows the mode is not
-        applied and the file inherits the directory's access control. Read the
-        file back with `Account.load`.
+        failed write leaves any existing file intact. Because `path` itself is
+        replaced, a symbolic link at `path` is replaced by a regular file and its
+        target is left unchanged, and a hard link at `path` no longer shares the
+        new contents. The directory containing `path` must be writable, also
+        when the file already exists. On
+        Windows the mode is not applied and the file inherits the directory's
+        access control. Read the file back with `Account.load`.
         """
         data = {
             "account_address": str(self.account_address),

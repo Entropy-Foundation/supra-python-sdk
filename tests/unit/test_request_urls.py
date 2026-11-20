@@ -204,6 +204,25 @@ class PathValueTests(unittest.IsolatedAsyncioTestCase):
             await self.client.events_by_type("")
         self.assertEqual(self.rec.requests, [])
 
+    async def test_dot_segment_values_are_rejected(self):
+        for value in (".", ".."):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    await self.client.account_resource(ADDRESS, value)
+                with self.assertRaises(ValueError):
+                    await self.client.account_module(ADDRESS, value)
+                with self.assertRaises(ValueError):
+                    await self.client.events_by_type(value)
+        self.assertEqual(self.rec.requests, [])
+
+    async def test_values_containing_dots_stay_in_their_segment(self):
+        for value in ("...", "a..b", ".a", "a."):
+            with self.subTest(value=value):
+                await self.client.account_module(ADDRESS, value)
+                self.assertEqual(
+                    self.rec.last_target, f"/prefix/rpc/v3/accounts/0x1/modules/{value}"
+                )
+
     async def test_hashes_must_be_64_hex_digits(self):
         bad = (
             "0x1/../2",
@@ -296,8 +315,8 @@ class FormatEndpointTests(unittest.TestCase):
             "rpc/v3/things/a%2Fb%3Fc%23d%3Ce%3E",
         )
 
-    def test_unknown_placeholder_rejects_empty_and_non_strings(self):
-        for value in ("", None, 5):
+    def test_unknown_placeholder_rejects_empty_dot_segments_and_non_strings(self):
+        for value in ("", ".", "..", None, 5):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 format_endpoint("rpc/v3/things/{thing_name}", thing_name=value)
 

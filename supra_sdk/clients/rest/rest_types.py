@@ -13,6 +13,7 @@ from supra_sdk.account_address import AccountAddress, to_account_address
 RPC_API_PREFIX = "rpc/v3"
 
 _HEX_HASH = re.compile(r"(0x)?[0-9a-fA-F]{64}")
+_DOT_SEGMENTS = frozenset({".", ".."})
 
 
 def encode_path_segment(value: str, name: str = "value") -> str:
@@ -23,16 +24,22 @@ def encode_path_segment(value: str, name: str = "value") -> str:
     segments before parsing them, so a Move type such as `0x1::coin::CoinStore<0x1::supra_coin::SupraCoin>`
     reaches it unchanged and is sent as `0x1::coin::CoinStore%3C0x1::supra_coin::SupraCoin%3E`.
 
+    `.` and `..` are refused. They are dot segments: the URL is normalised before it is sent, which removes a `.`
+    segment, and a `..` segment with the segment before it, so the request would go to a different endpoint. A value
+    that contains dots among other characters, such as `a..b` or `...`, is sent as it is.
+
     Args:
         value (str): The value to place in a path segment.
         name (str): Name of the parameter, used in the error message.
 
     Raises:
-        ValueError: If `value` is not a non-empty string.
+        ValueError: If `value` is not a non-empty string, or is `.` or `..`.
 
     """
     if not isinstance(value, str) or not value:
         raise ValueError(f"{name} must be a non-empty string")
+    if value in _DOT_SEGMENTS:
+        raise ValueError(f"{name} must not be {value!r}, a URL dot segment")
     return quote(value, safe=":,")
 
 
