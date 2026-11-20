@@ -6,6 +6,7 @@ import time
 import unittest
 from typing import Any, cast
 
+from examples.automation import automation_task_limits
 from supra_sdk.account import Account
 from supra_sdk.account_address import AccountAddress
 from supra_sdk.bcs import Serializer
@@ -510,14 +511,17 @@ class TestSupraAutomationTransactions(unittest.IsolatedAsyncioTestCase):
                 TransactionArgument(1, Serializer.u64),
             ],
         )
+        max_gas, fee_cap_for_epoch = await automation_task_limits(
+            self.supra_client, self.sender, automated_function
+        )
         # The node refuses a cap below its minimum gas price. These tests do not wait for
         # the task to execute, so the minimum is enough.
         tx_hash = await self.supra_client.register_automation_task(
             self.sender,
             automated_function,
-            9,
+            max_gas,
             (await self.supra_client.estimate_gas_price())["min_configured_gas_price"],
-            1 * (10**8),
+            fee_cap_for_epoch,
             int(time.time()) + 7200,
             [],
         )
