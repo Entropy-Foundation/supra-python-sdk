@@ -1,23 +1,19 @@
 # Releasing supra-sdk
 
-This document is for maintainers. A release is published to PyPI by the
-[`publish.yaml`](.github/workflows/publish.yaml) workflow when a tag `vX.Y.Z` is pushed.
-
-PyPI already has 0.1.0 and 0.1.1, so the first version published by this workflow must be above 0.1.1.
+This document is for maintainers. A maintainer publishes each release to PyPI by hand. When a tag `vX.Y.Z` is pushed,
+the [`release.yaml`](.github/workflows/release.yaml) workflow builds the distributions from the tagged commit. The
+maintainer then uploads the files from that workflow run to PyPI.
 
 ## One-time setup
 
-The PyPI trusted publisher checks only the repository, the workflow file name and the environment name, and a tag push
-runs the workflow as it exists at the tagged commit. Steps 2 and 3 are therefore required: they decide who can publish.
+1. On PyPI, get the Owner or Maintainer role on the `supra-sdk` project.
+2. On PyPI, create an API token with the scope `Project: supra-sdk` (Account settings, API tokens). Keep the token out
+   of the repository. Anyone who holds the token can publish, so keep the number of token holders small.
+3. On GitHub, check that you can bypass the `release-tags` ruleset (repository settings, Rules, Rulesets). The ruleset
+   restricts the creation, update and deletion of `refs/tags/v*`, so only a user who can bypass it can push a release
+   tag.
 
-1. On PyPI, add a trusted publisher to the `supra-sdk` project (Manage, Publishing): owner `Entropy-Foundation`,
-   repository `supra-python-sdk`, workflow `publish.yaml`, environment `pypi`.
-2. In the repository settings, create an environment named `pypi` with required reviewers.
-3. In the repository settings, add a tag ruleset for `refs/tags/v*` that restricts creation, update and deletion to
-   maintainers.
-
-The workflow uses PyPI trusted publishing; it needs no API token or repository secret. The publish action uploads
-attestations with the distributions.
+PyPI accepts attestations only from trusted publishing. Releases uploaded with an API token have no attestations.
 
 ## Release steps
 
@@ -28,10 +24,34 @@ Release tags go only on commits on `master`.
 3. Merge the release pull request into `master`.
 4. Tag the commit that the release pull request produced on `master` and push the tag:
    `git tag -a vX.Y.Z -m "supra-sdk X.Y.Z" <commit> && git push origin vX.Y.Z`.
-5. The workflow fails without publishing when the tag is not `v` followed by the version in `pyproject.toml`, or when
-   the tagged commit is not an ancestor of `origin/master`. These checks catch mistakes; the environment reviewers and
-   the tag ruleset are what restrict publishing. A reviewer approves the `pypi` environment deployment.
-6. Create the GitHub release for the tag, with the `CHANGELOG.md` entry as its notes. The workflow does not create it.
-7. Check that the new version is on PyPI.
+5. Wait for the `Release build` run of the tag to pass, and note its run ID from `gh run list --workflow release.yaml`.
+   The run fails when the tag is not `v` followed by the version in `pyproject.toml`, or when the tagged commit is not
+   an ancestor of `origin/master`.
+6. Download the distributions of the run into a new, empty directory:
 
-The documentation site is built from `master` by the docs workflow and shows the version of the installed package.
+   ```bash
+   gh run download <run-id> --name dist --dir <release-dir>
+   ```
+
+   The directory contains `supra_sdk-X.Y.Z-py3-none-any.whl` and `supra_sdk-X.Y.Z.tar.gz`.
+7. Check the metadata of both files:
+
+   ```bash
+   uvx twine@7.0.0 check <release-dir>/*
+   ```
+
+8. Upload both files to PyPI. `read` takes the token without echoing it or saving it in the shell history:
+
+   ```bash
+   read -rs UV_PUBLISH_TOKEN && export UV_PUBLISH_TOKEN
+   uv publish <release-dir>/*
+   ```
+
+   Upload only the files from the workflow run, not the files in your local `dist/`. A local build can include
+   uncommitted changes, and `uv publish` without arguments uploads every file in `dist/`. PyPI does not accept the same
+   file name twice, so you cannot replace a file after you upload it. To fix a bad release, yank it on PyPI and release
+   a new version.
+9. Create the GitHub release for the tag, with the `CHANGELOG.md` entry as its notes, and attach both files.
+10. Check that the new version is on PyPI: `pip install supra-sdk==X.Y.Z` in a new virtual environment installs it.
+
+The docs workflow builds the documentation site from `master`. The site shows the version of the installed package.
